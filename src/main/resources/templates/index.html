@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Meme Pulse | Live Meme Trends</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" th:href="@{/css/styles.css}">
+</head>
+<body>
+<div class="bg-layer"></div>
+<main class="container">
+    <section class="hero">
+        <p class="badge">LIVE TREND FEED</p>
+        <h1>Live Meme Feed by Category</h1>
+        <p class="hero-text">
+            This feed is ranked by popularity signals and now shows image posts only.
+        </p>
+        <p class="updated-at">
+            Last updated: <strong th:text="${lastUpdatedText}">2026-03-08</strong>
+            <span class="dot">•</span>
+            Next auto refresh: <strong th:text="${nextUpdatedText}">2026-03-15</strong>
+        </p>
+        <div class="controls">
+            <button type="button" class="category-btn active" data-category="all">All</button>
+            <button type="button" class="category-btn" th:each="category : ${categories}" th:attr="data-category=${category.key}"
+                    th:text="${category.name}">Category</button>
+        </div>
+        <div class="search-wrap">
+            <input id="searchInput" type="text" placeholder="Search by title or tags (e.g. gaming, reaction, kpop)">
+        </div>
+    </section>
+
+    <section class="category-list">
+        <article class="category-block" th:each="category : ${categories}" th:attr="data-category=${category.key}">
+            <div class="category-header">
+                <h2 th:text="${category.name}">Category</h2>
+                <p th:text="${category.description}">Description</p>
+            </div>
+            <div class="meme-grid">
+                <div class="meme-card"
+                     th:each="meme : ${category.items}"
+                    th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
+                    <div class="media">
+                        <img th:if="${meme.type == 'image'}"
+                             th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
+                    </div>
+                    <div class="card-body">
+                        <div class="meta">
+                            <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
+                            <span class="source" th:text="${meme.source}">Reddit</span>
+                            <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+                        </div>
+                        <h3 th:text="${meme.title}">Title</h3>
+                        <p th:text="${meme.summary}">Summary</p>
+                        <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                    </div>
+                </div>
+            </div>
+        </article>
+    </section>
+</main>
+
+<script th:src="@{/js/app.js}"></script>
+</body>
+</html>
