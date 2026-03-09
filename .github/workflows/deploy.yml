@@ -18,5 +18,7 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           password: ${{ secrets.SERVER_PASSWORD }}
           script: |
+            export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-17.0.18.0.8-1.el9.x86_64
+            export PATH=$JAVA_HOME/bin:$PATH
             cd /home/eomsunguk/deploy/humor_project/Meme-Site
             ./deploy.sh
