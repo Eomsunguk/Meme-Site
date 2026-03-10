@@ -1,13 +1,24 @@
 package com.example.humor_project.service;
 
+import com.example.humor_project.model.BatchStatus;
 import com.example.humor_project.model.MemeCategory;
 import com.example.humor_project.model.MemeItem;
+import com.example.humor_project.model.SourceType;
+import com.example.humor_project.persistence.entity.MemeBatchEntity;
+import com.example.humor_project.persistence.entity.MemeCategoryEntity;
+import com.example.humor_project.persistence.entity.MemeSnapshotEntity;
+import com.example.humor_project.persistence.entity.MemeSourceConfigEntity;
+import com.example.humor_project.persistence.repository.MemeBatchRepository;
+import com.example.humor_project.persistence.repository.MemeCategoryRepository;
+import com.example.humor_project.persistence.repository.MemeSnapshotRepository;
+import com.example.humor_project.persistence.repository.MemeSourceConfigRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.net.URI;
@@ -23,10 +34,11 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -37,6 +49,10 @@ public class MemeCatalogService {
 	private static final int MAX_ITEMS_PER_CATEGORY = 12;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
 
+	private final MemeCategoryRepository categoryRepository;
+	private final MemeSourceConfigRepository sourceConfigRepository;
+	private final MemeBatchRepository batchRepository;
+	private final MemeSnapshotRepository snapshotRepository;
 	private final ObjectMapper objectMapper = new ObjectMapper();
 	private final HttpClient httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(5))
@@ -51,47 +67,30 @@ public class MemeCatalogService {
 	@Value("${meme.x.bearer-token:}")
 	private String xBearerToken;
 
+	@Value("${meme.catalog.warm-up-enabled:true}")
+	private boolean warmUpEnabled;
+
 	private volatile List<MemeCategory> cachedCategories = fallbackCatalog();
 	private volatile LocalDate lastUpdatedDate = LocalDate.now(KST);
 
-	private final Map<String, List<String>> categoryToSubreddits = Map.of(
-			"gaming", List.of("gamingmemes", "gaming"),
-			"work", List.of("workmemes", "ProgrammerHumor"),
-			"kpop", List.of("kpoopheads", "kpopthoughts"),
-			"sports", List.of("sportsmemes", "soccer")
-	);
-
-	private final Map<String, String> categoryNames = Map.of(
-			"gaming", "Gaming",
-			"work", "Work",
-			"kpop", "K-POP",
-			"sports", "Sports"
-	);
-
-	private final Map<String, String> categoryDescriptions = Map.of(
-			"gaming", "Trending gaming memes",
-			"work", "Office and work-life meme trends",
-			"kpop", "K-pop fandom meme trends",
-			"sports", "Sports reaction meme trends"
-	);
-
-	private final Map<String, String> youtubeQueries = Map.of(
-			"gaming", "gaming meme",
-			"work", "office meme",
-			"kpop", "kpop meme",
-			"sports", "sports meme"
-	);
-
-	private final Map<String, String> xQueries = Map.of(
-			"gaming", "(gaming meme) has:media -is:retweet",
-			"work", "(office meme OR monday meme) has:media -is:retweet",
-			"kpop", "(kpop meme) has:media -is:retweet",
-			"sports", "(sports meme OR football meme) has:media -is:retweet"
-	);
+	public MemeCatalogService(
+			MemeCategoryRepository categoryRepository,
+			MemeSourceConfigRepository sourceConfigRepository,
+			MemeBatchRepository batchRepository,
+			MemeSnapshotRepository snapshotRepository
+	) {
+		this.categoryRepository = categoryRepository;
+		this.sourceConfigRepository = sourceConfigRepository;
+		this.batchRepository = batchRepository;
+		this.snapshotRepository = snapshotRepository;
+	}
 
 	@PostConstruct
 	public void warmUp() {
-		refreshCatalogSafely(LocalDate.now(KST));
+		loadPersistedCatalog();
+		if (warmUpEnabled) {
+			refreshCatalogSafely(LocalDate.now(KST));
+		}
 	}
 
 	public List<MemeCategory> getTrendingCategories() {
@@ -112,58 +111,180 @@ public class MemeCatalogService {
 	}
 
 	private synchronized void refreshCatalogSafely(LocalDate refreshDate) {
+		Instant startedAt = Instant.now();
+		MemeBatchEntity batch = batchRepository.save(new MemeBatchEntity(refreshDate, startedAt, BatchStatus.RUNNING));
 		try {
-			List<MemeCategory> live = buildLiveCatalog();
-			boolean hasAny = live.stream().anyMatch(category -> !category.items().isEmpty());
-			if (hasAny) {
-				cachedCategories = live;
+			List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
+			List<MemeSourceConfigEntity> configs = sourceConfigRepository.findAllByActiveTrueOrderByCategory_DisplayOrderAscDisplayOrderAscIdAsc();
+			List<MemeCategory> liveCatalog = buildLiveCatalog(categories, configs);
+			int itemCount = liveCatalog.stream().mapToInt(category -> category.items().size()).sum();
+			if (itemCount > 0) {
+				persistSuccessfulBatch(batch, categories, liveCatalog, Instant.now());
+				cachedCategories = liveCatalog;
 				lastUpdatedDate = refreshDate;
+				return;
 			}
-		} catch (Exception ignored) {
-			// Keep serving the previous snapshot.
+			saveFailedBatch(batch, "No playable meme items fetched", Instant.now());
+		} catch (Exception exception) {
+			saveFailedBatch(batch, truncate(exception.getMessage(), 500), Instant.now());
+		}
+		loadPersistedCatalog();
+	}
+
+	private void loadPersistedCatalog() {
+		List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
+		Optional<MemeBatchEntity> latestBatch = batchRepository.findTopByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
+		if (latestBatch.isPresent()) {
+			List<MemeSnapshotEntity> snapshots = snapshotRepository
+					.findAllByBatch_IdOrderByCategory_DisplayOrderAscRankOrderAscIdAsc(latestBatch.get().getId());
+			cachedCategories = mapPersistedCatalog(categories, snapshots);
+			lastUpdatedDate = latestBatch.get().getRunDate();
+			return;
+		}
+		if (!categories.isEmpty()) {
+			cachedCategories = categories.stream()
+					.map(category -> new MemeCategory(
+							category.getCategoryKey(),
+							category.getName(),
+							category.getDescription(),
+							List.of()
+					))
+					.collect(Collectors.toList());
 		}
 	}
 
-	private List<MemeCategory> buildLiveCatalog() {
-		Map<String, List<MemeItem>> bucket = new ConcurrentHashMap<>();
-		for (String key : categoryToSubreddits.keySet()) {
-			bucket.put(key, new ArrayList<>());
+	private List<MemeCategory> buildLiveCatalog(List<MemeCategoryEntity> categories, List<MemeSourceConfigEntity> configs) {
+		if (categories.isEmpty()) {
+			return List.of();
+		}
+		Map<Long, List<MemeItem>> bucket = new LinkedHashMap<>();
+		for (MemeCategoryEntity category : categories) {
+			bucket.put(category.getId(), new ArrayList<>());
 		}
 
-		for (Map.Entry<String, List<String>> entry : categoryToSubreddits.entrySet()) {
-			String category = entry.getKey();
-			for (String subreddit : entry.getValue()) {
-				bucket.get(category).addAll(fetchRedditHot(subreddit, 20));
-			}
-		}
+		Map<Long, List<MemeSourceConfigEntity>> configsByCategory = configs.stream()
+				.collect(Collectors.groupingBy(config -> config.getCategory().getId(), LinkedHashMap::new, Collectors.toList()));
 
-		if (!youtubeApiKey.isBlank()) {
-			for (Map.Entry<String, String> entry : youtubeQueries.entrySet()) {
-				bucket.get(entry.getKey()).addAll(fetchYoutubePopular(entry.getValue(), 5));
-			}
-		}
-		if (!xBearerToken.isBlank()) {
-			for (Map.Entry<String, String> entry : xQueries.entrySet()) {
-				bucket.get(entry.getKey()).addAll(fetchXPopular(entry.getValue(), 8));
+		for (MemeCategoryEntity category : categories) {
+			for (MemeSourceConfigEntity config : configsByCategory.getOrDefault(category.getId(), List.of())) {
+				bucket.get(category.getId()).addAll(fetchItems(config));
 			}
 		}
 
 		List<MemeCategory> result = new ArrayList<>();
-		for (String key : categoryToSubreddits.keySet()) {
-			List<MemeItem> selected = bucket.get(key).stream()
+		for (MemeCategoryEntity category : categories) {
+			List<MemeItem> selected = bucket.get(category.getId()).stream()
 					.filter(this::isPlayableMedia)
 					.sorted(Comparator.comparingLong(MemeItem::popularity).reversed())
 					.limit(MAX_ITEMS_PER_CATEGORY)
 					.collect(Collectors.toList());
-
 			result.add(new MemeCategory(
-					key,
-					categoryNames.getOrDefault(key, key),
-					categoryDescriptions.getOrDefault(key, ""),
+					category.getCategoryKey(),
+					category.getName(),
+					category.getDescription(),
 					selected
 			));
 		}
 		return result;
+	}
+
+	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
+		return switch (config.getSourceType()) {
+			case REDDIT -> fetchRedditHot(config.getQueryValue(), config.getFetchLimit());
+			case YOUTUBE -> {
+				if (youtubeApiKey.isBlank()) {
+					yield List.of();
+				}
+				String regionCode = config.getRegionCode() == null || config.getRegionCode().isBlank()
+						? youtubeRegionCode
+						: config.getRegionCode();
+				yield fetchYoutubePopular(config.getQueryValue(), regionCode, config.getFetchLimit());
+			}
+			case X -> {
+				if (xBearerToken.isBlank()) {
+					yield List.of();
+				}
+				yield fetchXPopular(config.getQueryValue(), config.getFetchLimit());
+			}
+		};
+	}
+
+	@Transactional
+	protected void persistSuccessfulBatch(
+			MemeBatchEntity batch,
+			List<MemeCategoryEntity> categories,
+			List<MemeCategory> catalog,
+			Instant endedAt
+	) {
+		Map<String, MemeCategoryEntity> categoryByKey = categories.stream()
+				.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category));
+		List<MemeSnapshotEntity> snapshots = new ArrayList<>();
+		int itemCount = 0;
+		for (MemeCategory category : catalog) {
+			MemeCategoryEntity categoryEntity = categoryByKey.get(category.key());
+			if (categoryEntity == null) {
+				continue;
+			}
+			for (int index = 0; index < category.items().size(); index++) {
+				MemeItem item = category.items().get(index);
+				snapshots.add(new MemeSnapshotEntity(
+						batch,
+						categoryEntity,
+						truncate(item.title(), 255),
+						truncate(item.type(), 32),
+						truncate(item.mediaUrl(), 1000),
+						truncate(item.sourceUrl(), 1000),
+						truncate(item.summary(), 500),
+						truncate(item.tags(), 255),
+						truncate(item.source(), 64),
+						item.popularity(),
+						index + 1
+				));
+				itemCount++;
+			}
+		}
+		batch.markFinished(BatchStatus.SUCCESS, "Fetched " + itemCount + " meme items", itemCount, endedAt);
+		batchRepository.save(batch);
+		snapshotRepository.saveAll(snapshots);
+	}
+
+	@Transactional
+	protected void saveFailedBatch(MemeBatchEntity batch, String message, Instant endedAt) {
+		batch.markFinished(BatchStatus.FAILED, truncate(message, 500), 0, endedAt);
+		batchRepository.save(batch);
+	}
+
+	private List<MemeCategory> mapPersistedCatalog(List<MemeCategoryEntity> categories, List<MemeSnapshotEntity> snapshots) {
+		Map<String, List<MemeItem>> itemsByCategory = new LinkedHashMap<>();
+		for (MemeCategoryEntity category : categories) {
+			itemsByCategory.put(category.getCategoryKey(), new ArrayList<>());
+		}
+		for (MemeSnapshotEntity snapshot : snapshots) {
+			String categoryKey = snapshot.getCategory().getCategoryKey();
+			List<MemeItem> items = itemsByCategory.get(categoryKey);
+			if (items == null) {
+				continue;
+			}
+			items.add(new MemeItem(
+					snapshot.getTitle(),
+					snapshot.getMediaType(),
+					snapshot.getMediaUrl(),
+					false,
+					snapshot.getSourceUrl(),
+					snapshot.getSummary(),
+					snapshot.getTags(),
+					snapshot.getSource(),
+					snapshot.getPopularity()
+			));
+		}
+		return categories.stream()
+				.map(category -> new MemeCategory(
+						category.getCategoryKey(),
+						category.getName(),
+						category.getDescription(),
+						itemsByCategory.getOrDefault(category.getCategoryKey(), List.of())
+				))
+				.collect(Collectors.toList());
 	}
 
 	private List<MemeItem> fetchRedditHot(String subreddit, int limit) {
@@ -192,7 +313,7 @@ public class MemeCatalogService {
 						mediaUrl,
 						false,
 						sourceUrl,
-						"Reddit score " + score + " / comments " + comments,
+						"Reddit score " + score + " / comments " + comments + " / fetched " + DATE_FORMATTER.format(LocalDate.now(KST)),
 						subreddit + ", reddit",
 						"Reddit",
 						score
@@ -204,14 +325,14 @@ public class MemeCatalogService {
 		return items;
 	}
 
-	private List<MemeItem> fetchYoutubePopular(String query, int limit) {
+	private List<MemeItem> fetchYoutubePopular(String query, String regionCode, int limit) {
 		List<MemeItem> items = new ArrayList<>();
 		try {
 			String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
 			String publishedAfter = Instant.now().minus(Duration.ofDays(30)).toString();
 			String searchUrl = "https://www.googleapis.com/youtube/v3/search"
 					+ "?part=snippet&type=video&maxResults=" + limit
-					+ "&order=viewCount&regionCode=" + youtubeRegionCode
+					+ "&order=viewCount&regionCode=" + regionCode
 					+ "&publishedAfter=" + URLEncoder.encode(publishedAfter, StandardCharsets.UTF_8)
 					+ "&q=" + encodedQuery
 					+ "&key=" + youtubeApiKey;
@@ -281,7 +402,7 @@ public class MemeCatalogService {
 					+ "&media.fields=media_key,type,url,preview_image_url,variants";
 
 			JsonNode root = getJson(url, Map.of("Authorization", "Bearer " + xBearerToken));
-			Map<String, JsonNode> mediaByKey = new HashMap<>();
+			Map<String, JsonNode> mediaByKey = new LinkedHashMap<>();
 			for (JsonNode media : root.path("includes").path("media")) {
 				String key = media.path("media_key").asText("");
 				if (!key.isBlank()) {
@@ -302,11 +423,9 @@ public class MemeCatalogService {
 
 				String mediaType = media.path("type").asText("");
 				String mediaUrl = "";
-				boolean embed = false;
 				String type = "image";
 				if ("photo".equals(mediaType)) {
 					mediaUrl = media.path("url").asText("");
-					type = "image";
 				} else if ("animated_gif".equals(mediaType) || "video".equals(mediaType)) {
 					mediaUrl = resolveXVideoVariant(media.path("variants"));
 					type = mediaType.equals("animated_gif") ? "gif" : "video";
@@ -326,7 +445,7 @@ public class MemeCatalogService {
 						shortText,
 						type,
 						mediaUrl,
-						embed,
+						false,
 						"https://x.com/i/web/status/" + id,
 						"X likes " + likes + " / reposts " + reposts,
 						"x, trending",
@@ -421,6 +540,13 @@ public class MemeCatalogService {
 		return "image".equals(item.type());
 	}
 
+	private String truncate(String value, int maxLength) {
+		if (value == null || value.length() <= maxLength) {
+			return value;
+		}
+		return value.substring(0, maxLength);
+	}
+
 	private List<MemeCategory> fallbackCatalog() {
 		return List.of(
 				new MemeCategory("gaming", "Gaming", "Fallback card when API fetch fails", List.of(
@@ -435,7 +561,10 @@ public class MemeCatalogService {
 								"Local",
 								1
 						)
-				))
+				)),
+				new MemeCategory("work", "Work", "Office and work-life meme trends", List.of()),
+				new MemeCategory("kpop", "K-POP", "K-pop fandom meme trends", List.of()),
+				new MemeCategory("sports", "Sports", "Sports reaction meme trends", List.of())
 		);
 	}
 }
