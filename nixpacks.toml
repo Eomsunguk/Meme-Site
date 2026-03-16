@@ -1,5 +1,5 @@
 [phases.build]
-cmds = ["chmod +x gradlew", "./gradlew bootJar"]
+cmds = ["chmod +x gradlew", "./gradlew clean build"]
 
 [phases.start]
 cmds = ["java -jar build/libs/humor_project-0.0.1-SNAPSHOT.jar"]
