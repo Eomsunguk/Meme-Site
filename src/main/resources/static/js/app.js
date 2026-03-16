@@ -35,3 +35,13 @@ buttons.forEach((button) => {
 });
 
 searchInput.addEventListener("input", applyFilters);
+
+window.addEventListener("load", () => {
+    const splash = document.getElementById("splash");
+    if (!splash) return;
+
+    setTimeout(() => {
+        splash.classList.add("hide");
+        setTimeout(() => splash.remove(), 500);
+    }, 900);
+});

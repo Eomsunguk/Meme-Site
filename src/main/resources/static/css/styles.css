@@ -204,6 +204,40 @@ body {
     display: none;
 }
 
+.splash {
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at 30% 30%, rgba(255, 209, 102, 0.28), rgba(9, 18, 28, 0.96));
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    z-index: 9999;
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+    opacity: 1;
+    visibility: visible;
+}
+
+.splash.hide {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.splash img {
+    width: min(220px, 70%);
+    max-width: 260px;
+    filter: drop-shadow(0 0 18px rgba(0, 0, 0, 0.35));
+}
+
+.splash-text {
+    font-family: "Do Hyeon", sans-serif;
+    color: var(--ink);
+    font-size: 1.3rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
 @media (max-width: 700px) {
     .container {
         padding-top: 24px;
