@@ -1,0 +1,4 @@
+[build]
+builder = "gradle"
+buildCommand = "./gradlew bootJar"
+startCommand = "java -jar build/libs/*.jar"
