@@ -51,8 +51,7 @@ public class MemeCatalogService {
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final int MAX_ITEMS_PER_CATEGORY = 10;
 	private static final int MAX_ARCHIVE_WEEKS = 3;
-	private static final int DEFAULT_YOUTUBE_LIMIT = 5;
-	private static final int DEFAULT_INSTAGRAM_LIMIT = 5;
+	private static final int DEFAULT_IMGFLIP_LIMIT = 10;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
 
 	private final MemeCategoryRepository categoryRepository;
@@ -186,7 +185,7 @@ public class MemeCatalogService {
 
 		for (MemeCategoryEntity category : categories) {
 			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getId(), List.of()).stream()
-					.filter(config -> config.getSourceType() == SourceType.INSTAGRAM || config.getSourceType() == SourceType.YOUTUBE)
+					.filter(config -> config.getSourceType() == SourceType.IMGFLIP)
 					.collect(Collectors.toList());
 			if (effectiveConfigs.isEmpty()) {
 				effectiveConfigs = buildDefaultPreferredConfigs(category);
@@ -215,6 +214,7 @@ public class MemeCatalogService {
 
 	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
 		return switch (config.getSourceType()) {
+			case IMGFLIP -> fetchImgflipPopular(config.getQueryValue(), config.getFetchLimit());
 			case INSTAGRAM -> {
 				if (instagramAccessToken.isBlank() || instagramUserId.isBlank()) {
 					yield List.of();
@@ -235,24 +235,15 @@ public class MemeCatalogService {
 	}
 
 	private List<MemeSourceConfigEntity> buildDefaultPreferredConfigs(MemeCategoryEntity category) {
-		String key = category.getCategoryKey();
-		String youtubeQuery = switch (key) {
-			case "gaming" -> "gaming meme";
-			case "work" -> "office meme";
-			case "kpop" -> "kpop meme";
-			case "sports" -> "sports meme";
-			default -> category.getName() + " meme";
-		};
-		String instagramQuery = switch (key) {
-			case "gaming" -> "gamingmeme";
-			case "work" -> "workmemes";
-			case "kpop" -> "kpopmeme";
-			case "sports" -> "sportsmeme";
-			default -> category.getName().replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT) + "meme";
+		int offset = switch (category.getCategoryKey()) {
+			case "gaming" -> 0;
+			case "work" -> 10;
+			case "kpop" -> 20;
+			case "sports" -> 30;
+			default -> 0;
 		};
 		return List.of(
-				new InMemorySourceConfig(SourceType.INSTAGRAM, instagramQuery, DEFAULT_INSTAGRAM_LIMIT, null),
-				new InMemorySourceConfig(SourceType.YOUTUBE, youtubeQuery, DEFAULT_YOUTUBE_LIMIT, youtubeRegionCode)
+				new InMemorySourceConfig(SourceType.IMGFLIP, "offset:" + offset, DEFAULT_IMGFLIP_LIMIT, null)
 		);
 	}
 
@@ -334,6 +325,9 @@ public class MemeCatalogService {
 			itemsByCategory.put(category.getCategoryKey(), new ArrayList<>());
 		}
 		for (MemeSnapshotEntity snapshot : snapshots) {
+			if (!isCuratedSnapshot(snapshot)) {
+				continue;
+			}
 			String categoryKey = snapshot.getCategory().getCategoryKey();
 			List<MemeItem> items = itemsByCategory.get(categoryKey);
 			if (items == null) {
@@ -386,10 +380,16 @@ public class MemeCatalogService {
 				continue;
 			}
 			MemeBatchEntity batch = entry.getValue();
+			List<MemeSnapshotEntity> curatedSnapshots = loadSnapshots(batch.getId()).stream()
+					.filter(this::isCuratedSnapshot)
+					.collect(Collectors.toList());
+			if (curatedSnapshots.isEmpty()) {
+				continue;
+			}
 			archives.add(new MemeArchiveMonth(
-					toWeeklyLabel(currentDate, batch.getRunDate()),
+					weeklyArchiveLabel(currentDate, batch.getRunDate()),
 					batch.getRunDate(),
-					mapPersistedCatalog(categories, loadSnapshots(batch.getId()))
+					mapPersistedCatalog(categories, curatedSnapshots)
 			));
 		}
 		cachedArchiveMonths = archives;
@@ -409,6 +409,9 @@ public class MemeCatalogService {
 
 		for (MemeBatchEntity batch : successfulBatches) {
 			for (MemeSnapshotEntity snapshot : loadSnapshots(batch.getId())) {
+				if (!isCuratedSnapshot(snapshot)) {
+					continue;
+				}
 				String categoryKey = snapshot.getCategory().getCategoryKey();
 				Map<String, MemeItem> uniqueItems = uniqueByCategory.get(categoryKey);
 				if (uniqueItems == null) {
@@ -454,6 +457,17 @@ public class MemeCatalogService {
 
 	private LocalDate startOfWeek(LocalDate date) {
 		return date.with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+	}
+
+	private String weeklyArchiveLabel(LocalDate currentDate, LocalDate snapshotDate) {
+		long weeksBetween = ChronoUnit.WEEKS.between(startOfWeek(snapshotDate), startOfWeek(currentDate));
+		if (weeksBetween <= 1) {
+			return "Last Week";
+		}
+		if (weeksBetween == 2) {
+			return "2 Weeks Ago";
+		}
+		return weeksBetween + " Weeks Ago";
 	}
 
 	private String toWeeklyLabel(LocalDate currentDate, LocalDate snapshotDate) {
@@ -544,6 +558,42 @@ public class MemeCatalogService {
 						"youtube, meme",
 						"YouTube",
 						viewCount
+				));
+			}
+		} catch (Exception ignored) {
+			return List.of();
+		}
+		return items;
+	}
+
+	private List<MemeItem> fetchImgflipPopular(String queryValue, int limit) {
+		List<MemeItem> items = new ArrayList<>();
+		try {
+			int offset = parseOffset(queryValue);
+			JsonNode root = getJson("https://api.imgflip.com/get_memes", Map.of());
+			JsonNode memes = root.path("data").path("memes");
+			if (!memes.isArray()) {
+				return List.of();
+			}
+			for (int index = offset; index < memes.size() && items.size() < Math.max(limit, 1); index++) {
+				JsonNode meme = memes.get(index);
+				String imageUrl = meme.path("url").asText("");
+				if (imageUrl.isBlank()) {
+					continue;
+				}
+				String name = meme.path("name").asText("Imgflip meme");
+				long views = meme.path("box_count").asLong(0L) * 100L + Math.max(0, memes.size() - index);
+				String id = meme.path("id").asText("");
+				items.add(new MemeItem(
+						name,
+						"image",
+						imageUrl,
+						false,
+						id.isBlank() ? imageUrl : "https://imgflip.com/memetemplate/" + id,
+						"Popular humor image from Imgflip's meme catalog",
+						"imgflip, humor, popular",
+						"Imgflip",
+						views
 				));
 			}
 		} catch (Exception ignored) {
@@ -773,6 +823,22 @@ public class MemeCatalogService {
 		return "image".equals(item.type()) || "video".equals(item.type()) || item.embed();
 	}
 
+	private boolean isCuratedSnapshot(MemeSnapshotEntity snapshot) {
+		return "Imgflip".equalsIgnoreCase(snapshot.getSource());
+	}
+
+	private int parseOffset(String queryValue) {
+		if (queryValue == null || queryValue.isBlank()) {
+			return 0;
+		}
+		String normalized = queryValue.startsWith("offset:") ? queryValue.substring("offset:".length()) : queryValue;
+		try {
+			return Math.max(Integer.parseInt(normalized.trim()), 0);
+		} catch (NumberFormatException exception) {
+			return 0;
+		}
+	}
+
 	private String truncate(String value, int maxLength) {
 		if (value == null || value.length() <= maxLength) {
 			return value;
@@ -782,58 +848,10 @@ public class MemeCatalogService {
 
 	private List<MemeCategory> fallbackCatalog() {
 		return List.of(
-				new MemeCategory("gaming", "Gaming", "Fallback card when API fetch fails", List.of(
-						new MemeItem(
-								"Fallback Meme",
-								"image",
-								"https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&w=1200&q=80",
-								false,
-								"https://unsplash.com/",
-								"Default fallback card shown when live trend APIs fail",
-								"fallback",
-								"Local",
-								1
-						)
-				)),
-				new MemeCategory("work", "Work", "Office and work-life meme trends", List.of(
-						new MemeItem(
-								"When the sprint board says 'just one quick fix'",
-								"image",
-								"/img/archive/work-2026-03.svg",
-								false,
-								"https://www.reddit.com/r/ProgrammerHumor/",
-								"Starter card kept until live sources return a newer work meme batch.",
-								"work, office, sprint",
-								"Archive Seed",
-								1
-						)
-				)),
-				new MemeCategory("kpop", "K-POP", "K-pop fandom meme trends", List.of(
-						new MemeItem(
-								"Bias changed again after one fancam",
-								"image",
-								"/img/archive/kpop-2026-03.svg",
-								false,
-								"https://www.reddit.com/r/kpoopheads/",
-								"Starter card kept until live sources return a newer K-pop meme batch.",
-								"kpop, fandom, fancam",
-								"Archive Seed",
-								1
-						)
-				)),
-				new MemeCategory("sports", "Sports", "Sports reaction meme trends", List.of(
-						new MemeItem(
-								"Team rebuilding for the fifth year in a row",
-								"image",
-								"/img/archive/sports-2026-03.svg",
-								false,
-								"https://www.reddit.com/r/sportsmemes/",
-								"Starter card kept until live sources return a newer sports meme batch.",
-								"sports, rebuild, reaction",
-								"Archive Seed",
-								1
-						)
-				))
+				new MemeCategory("gaming", "Gaming", "Humor images pulled from a popular meme catalog", List.of()),
+				new MemeCategory("work", "Work", "Humor images pulled from a popular meme catalog", List.of()),
+				new MemeCategory("kpop", "K-POP", "Humor images pulled from a popular meme catalog", List.of()),
+				new MemeCategory("sports", "Sports", "Humor images pulled from a popular meme catalog", List.of())
 		);
 	}
 
