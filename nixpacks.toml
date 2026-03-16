@@ -1,0 +1,5 @@
+[phases.build]
+cmds = ["./gradlew bootJar"]
+
+[phases.start]
+cmds = ["java -jar build/libs/*.jar"]
