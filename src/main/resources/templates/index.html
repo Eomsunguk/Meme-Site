@@ -20,7 +20,7 @@
         <p class="badge">LIVE TREND FEED</p>
         <h1>Live Meme Feed by Category</h1>
         <p class="hero-text">
-            This feed keeps the newest meme snapshot live and preserves older drops in a monthly archive.
+            This feed keeps about 10 memes per category live and opens weekly archive shelves for older drops.
         </p>
         <p class="updated-at">
             Last updated: <strong th:text="${lastUpdatedText}">2026-03-08</strong>
@@ -74,8 +74,8 @@
 
     <section class="archive-section" th:if="${!#lists.isEmpty(archives)}">
         <div class="section-heading">
-            <p class="badge badge-soft">MONTHLY ARCHIVE</p>
-            <h2>Past Meme Drops</h2>
+            <p class="badge badge-soft">WEEKLY ARCHIVE</p>
+            <h2>Weekly Throwbacks</h2>
         </div>
         <div class="archive-stack">
             <section class="archive-month" th:each="archive : ${archives}">

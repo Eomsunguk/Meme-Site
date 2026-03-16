@@ -31,8 +31,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.YearMonth;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
+import java.time.temporal.TemporalAdjusters;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -48,10 +49,9 @@ import java.util.stream.Collectors;
 public class MemeCatalogService {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
-	private static final int MAX_ITEMS_PER_CATEGORY = 12;
-	private static final int MAX_ARCHIVE_MONTHS = 6;
+	private static final int MAX_ITEMS_PER_CATEGORY = 10;
+	private static final int MAX_ARCHIVE_WEEKS = 3;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
-	private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
 
 	private final MemeCategoryRepository categoryRepository;
 	private final MemeSourceConfigRepository sourceConfigRepository;
@@ -126,7 +126,7 @@ public class MemeCatalogService {
 			List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
 			List<MemeSourceConfigEntity> configs = sourceConfigRepository.findAllByActiveTrueOrderByCategory_DisplayOrderAscDisplayOrderAscIdAsc();
 			List<MemeCategory> liveCatalog = buildLiveCatalog(categories, configs);
-			List<MemeCategory> mergedCatalog = mergeWithLatestSuccessfulCatalog(categories, liveCatalog);
+			List<MemeCategory> mergedCatalog = mergeWithRecentHistory(categories, liveCatalog);
 			int itemCount = mergedCatalog.stream().mapToInt(category -> category.items().size()).sum();
 			if (itemCount > 0) {
 				persistSuccessfulBatch(batch, categories, mergedCatalog, Instant.now());
@@ -220,35 +220,29 @@ public class MemeCatalogService {
 		};
 	}
 
-	private List<MemeCategory> mergeWithLatestSuccessfulCatalog(List<MemeCategoryEntity> categories, List<MemeCategory> liveCatalog) {
-		Optional<MemeBatchEntity> latestBatch = batchRepository.findTopByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
-		if (latestBatch.isEmpty()) {
+	private List<MemeCategory> mergeWithRecentHistory(List<MemeCategoryEntity> categories, List<MemeCategory> liveCatalog) {
+		List<MemeBatchEntity> successfulBatches = batchRepository.findAllByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
+		if (successfulBatches.isEmpty()) {
 			return liveCatalog;
 		}
 
-		Map<String, MemeCategory> previousByKey = mapPersistedCatalog(categories, loadSnapshots(latestBatch.get().getId())).stream()
-				.collect(Collectors.toMap(MemeCategory::key, category -> category, (left, right) -> left, LinkedHashMap::new));
+		Map<String, List<MemeItem>> historicalItemsByCategory = buildHistoricalItemsByCategory(categories, successfulBatches);
 		Map<String, MemeCategory> liveByKey = liveCatalog.stream()
 				.collect(Collectors.toMap(MemeCategory::key, category -> category, (left, right) -> left, LinkedHashMap::new));
 
 		return categories.stream()
 				.map(categoryEntity -> {
 					MemeCategory live = liveByKey.get(categoryEntity.getCategoryKey());
-					if (live != null && !live.items().isEmpty()) {
-						return live;
-					}
-					MemeCategory previous = previousByKey.get(categoryEntity.getCategoryKey());
-					if (previous != null && !previous.items().isEmpty()) {
-						return previous;
-					}
-					return live != null
-							? live
-							: new MemeCategory(
-									categoryEntity.getCategoryKey(),
-									categoryEntity.getName(),
-									categoryEntity.getDescription(),
-									List.of()
-							);
+					List<MemeItem> mergedItems = topOffItems(
+							live == null ? List.of() : live.items(),
+							historicalItemsByCategory.getOrDefault(categoryEntity.getCategoryKey(), List.of())
+					);
+					return new MemeCategory(
+							categoryEntity.getCategoryKey(),
+							categoryEntity.getName(),
+							categoryEntity.getDescription(),
+							mergedItems
+					);
 				})
 				.collect(Collectors.toList());
 	}
@@ -332,24 +326,32 @@ public class MemeCatalogService {
 	}
 
 	private void loadArchiveMonths(List<MemeCategoryEntity> categories) {
-		Map<YearMonth, MemeBatchEntity> latestBatchByMonth = new LinkedHashMap<>();
-		for (MemeBatchEntity batch : batchRepository.findAllByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS)) {
-			YearMonth month = YearMonth.from(batch.getRunDate());
-			latestBatchByMonth.putIfAbsent(month, batch);
-			if (latestBatchByMonth.size() >= MAX_ARCHIVE_MONTHS + 1) {
+		List<MemeBatchEntity> successfulBatches = batchRepository.findAllByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
+		if (successfulBatches.isEmpty()) {
+			cachedArchiveMonths = List.of();
+			return;
+		}
+
+		LocalDate currentDate = successfulBatches.get(0).getRunDate();
+		Map<LocalDate, MemeBatchEntity> latestBatchByWeek = new LinkedHashMap<>();
+		for (MemeBatchEntity batch : successfulBatches) {
+			LocalDate weekStart = startOfWeek(batch.getRunDate());
+			latestBatchByWeek.putIfAbsent(weekStart, batch);
+			if (latestBatchByWeek.size() >= MAX_ARCHIVE_WEEKS + 1) {
 				break;
 			}
 		}
 
 		List<MemeArchiveMonth> archives = new ArrayList<>();
-		boolean skipCurrent = true;
-		for (MemeBatchEntity batch : latestBatchByMonth.values()) {
-			if (skipCurrent) {
-				skipCurrent = false;
+		boolean skipCurrentWeek = true;
+		for (Map.Entry<LocalDate, MemeBatchEntity> entry : latestBatchByWeek.entrySet()) {
+			if (skipCurrentWeek) {
+				skipCurrentWeek = false;
 				continue;
 			}
+			MemeBatchEntity batch = entry.getValue();
 			archives.add(new MemeArchiveMonth(
-					batch.getRunDate().format(MONTH_FORMATTER),
+					toWeeklyLabel(currentDate, batch.getRunDate()),
 					batch.getRunDate(),
 					mapPersistedCatalog(categories, loadSnapshots(batch.getId()))
 			));
@@ -359,6 +361,74 @@ public class MemeCatalogService {
 
 	private List<MemeSnapshotEntity> loadSnapshots(Long batchId) {
 		return snapshotRepository.findAllByBatch_IdOrderByCategory_DisplayOrderAscRankOrderAscIdAsc(batchId);
+	}
+
+	private Map<String, List<MemeItem>> buildHistoricalItemsByCategory(List<MemeCategoryEntity> categories, List<MemeBatchEntity> successfulBatches) {
+		Map<String, List<MemeItem>> itemsByCategory = new LinkedHashMap<>();
+		Map<String, Map<String, MemeItem>> uniqueByCategory = new LinkedHashMap<>();
+		for (MemeCategoryEntity category : categories) {
+			itemsByCategory.put(category.getCategoryKey(), new ArrayList<>());
+			uniqueByCategory.put(category.getCategoryKey(), new LinkedHashMap<>());
+		}
+
+		for (MemeBatchEntity batch : successfulBatches) {
+			for (MemeSnapshotEntity snapshot : loadSnapshots(batch.getId())) {
+				String categoryKey = snapshot.getCategory().getCategoryKey();
+				Map<String, MemeItem> uniqueItems = uniqueByCategory.get(categoryKey);
+				if (uniqueItems == null) {
+					continue;
+				}
+				String identity = snapshot.getSourceUrl() + "|" + snapshot.getTitle();
+				uniqueItems.putIfAbsent(identity, new MemeItem(
+						snapshot.getTitle(),
+						snapshot.getMediaType(),
+						snapshot.getMediaUrl(),
+						false,
+						snapshot.getSourceUrl(),
+						snapshot.getSummary(),
+						snapshot.getTags(),
+						snapshot.getSource(),
+						snapshot.getPopularity()
+				));
+			}
+		}
+
+		for (Map.Entry<String, Map<String, MemeItem>> entry : uniqueByCategory.entrySet()) {
+			itemsByCategory.put(entry.getKey(), new ArrayList<>(entry.getValue().values()));
+		}
+		return itemsByCategory;
+	}
+
+	private List<MemeItem> topOffItems(List<MemeItem> preferredItems, List<MemeItem> historicalItems) {
+		Map<String, MemeItem> merged = new LinkedHashMap<>();
+		for (MemeItem item : preferredItems) {
+			merged.putIfAbsent(item.sourceUrl() + "|" + item.title(), item);
+			if (merged.size() >= MAX_ITEMS_PER_CATEGORY) {
+				return new ArrayList<>(merged.values());
+			}
+		}
+		for (MemeItem item : historicalItems) {
+			merged.putIfAbsent(item.sourceUrl() + "|" + item.title(), item);
+			if (merged.size() >= MAX_ITEMS_PER_CATEGORY) {
+				break;
+			}
+		}
+		return new ArrayList<>(merged.values());
+	}
+
+	private LocalDate startOfWeek(LocalDate date) {
+		return date.with(TemporalAdjusters.previousOrSame(java.time.DayOfWeek.MONDAY));
+	}
+
+	private String toWeeklyLabel(LocalDate currentDate, LocalDate snapshotDate) {
+		long weeksBetween = ChronoUnit.WEEKS.between(startOfWeek(snapshotDate), startOfWeek(currentDate));
+		if (weeksBetween <= 1) {
+			return "지난주";
+		}
+		if (weeksBetween == 2) {
+			return "지지난주";
+		}
+		return weeksBetween + "주 전";
 	}
 
 	private List<MemeItem> fetchRedditHot(String subreddit, int limit) {
