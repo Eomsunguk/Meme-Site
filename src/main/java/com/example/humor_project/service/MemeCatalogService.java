@@ -1,6 +1,7 @@
 package com.example.humor_project.service;
 
 import com.example.humor_project.model.BatchStatus;
+import com.example.humor_project.model.MemeArchiveMonth;
 import com.example.humor_project.model.MemeCategory;
 import com.example.humor_project.model.MemeItem;
 import com.example.humor_project.model.SourceType;
@@ -30,6 +31,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -47,7 +49,9 @@ public class MemeCatalogService {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final int MAX_ITEMS_PER_CATEGORY = 12;
+	private static final int MAX_ARCHIVE_MONTHS = 6;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
+	private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
 
 	private final MemeCategoryRepository categoryRepository;
 	private final MemeSourceConfigRepository sourceConfigRepository;
@@ -71,6 +75,7 @@ public class MemeCatalogService {
 	private boolean warmUpEnabled;
 
 	private volatile List<MemeCategory> cachedCategories = fallbackCatalog();
+	private volatile List<MemeArchiveMonth> cachedArchiveMonths = List.of();
 	private volatile LocalDate lastUpdatedDate = LocalDate.now(KST);
 
 	public MemeCatalogService(
@@ -101,6 +106,10 @@ public class MemeCatalogService {
 		return lastUpdatedDate;
 	}
 
+	public List<MemeArchiveMonth> getArchiveMonths() {
+		return cachedArchiveMonths;
+	}
+
 	public LocalDate getNextUpdateDate() {
 		return lastUpdatedDate.plusWeeks(1);
 	}
@@ -117,11 +126,13 @@ public class MemeCatalogService {
 			List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
 			List<MemeSourceConfigEntity> configs = sourceConfigRepository.findAllByActiveTrueOrderByCategory_DisplayOrderAscDisplayOrderAscIdAsc();
 			List<MemeCategory> liveCatalog = buildLiveCatalog(categories, configs);
-			int itemCount = liveCatalog.stream().mapToInt(category -> category.items().size()).sum();
+			List<MemeCategory> mergedCatalog = mergeWithLatestSuccessfulCatalog(categories, liveCatalog);
+			int itemCount = mergedCatalog.stream().mapToInt(category -> category.items().size()).sum();
 			if (itemCount > 0) {
-				persistSuccessfulBatch(batch, categories, liveCatalog, Instant.now());
-				cachedCategories = liveCatalog;
+				persistSuccessfulBatch(batch, categories, mergedCatalog, Instant.now());
+				cachedCategories = mergedCatalog;
 				lastUpdatedDate = refreshDate;
+				loadArchiveMonths(categories);
 				return;
 			}
 			saveFailedBatch(batch, "No playable meme items fetched", Instant.now());
@@ -135,10 +146,9 @@ public class MemeCatalogService {
 		List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
 		Optional<MemeBatchEntity> latestBatch = batchRepository.findTopByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
 		if (latestBatch.isPresent()) {
-			List<MemeSnapshotEntity> snapshots = snapshotRepository
-					.findAllByBatch_IdOrderByCategory_DisplayOrderAscRankOrderAscIdAsc(latestBatch.get().getId());
-			cachedCategories = mapPersistedCatalog(categories, snapshots);
+			cachedCategories = mapPersistedCatalog(categories, loadSnapshots(latestBatch.get().getId()));
 			lastUpdatedDate = latestBatch.get().getRunDate();
+			loadArchiveMonths(categories);
 			return;
 		}
 		if (!categories.isEmpty()) {
@@ -151,6 +161,7 @@ public class MemeCatalogService {
 					))
 					.collect(Collectors.toList());
 		}
+		cachedArchiveMonths = List.of();
 	}
 
 	private List<MemeCategory> buildLiveCatalog(List<MemeCategoryEntity> categories, List<MemeSourceConfigEntity> configs) {
@@ -207,6 +218,39 @@ public class MemeCatalogService {
 				yield fetchXPopular(config.getQueryValue(), config.getFetchLimit());
 			}
 		};
+	}
+
+	private List<MemeCategory> mergeWithLatestSuccessfulCatalog(List<MemeCategoryEntity> categories, List<MemeCategory> liveCatalog) {
+		Optional<MemeBatchEntity> latestBatch = batchRepository.findTopByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS);
+		if (latestBatch.isEmpty()) {
+			return liveCatalog;
+		}
+
+		Map<String, MemeCategory> previousByKey = mapPersistedCatalog(categories, loadSnapshots(latestBatch.get().getId())).stream()
+				.collect(Collectors.toMap(MemeCategory::key, category -> category, (left, right) -> left, LinkedHashMap::new));
+		Map<String, MemeCategory> liveByKey = liveCatalog.stream()
+				.collect(Collectors.toMap(MemeCategory::key, category -> category, (left, right) -> left, LinkedHashMap::new));
+
+		return categories.stream()
+				.map(categoryEntity -> {
+					MemeCategory live = liveByKey.get(categoryEntity.getCategoryKey());
+					if (live != null && !live.items().isEmpty()) {
+						return live;
+					}
+					MemeCategory previous = previousByKey.get(categoryEntity.getCategoryKey());
+					if (previous != null && !previous.items().isEmpty()) {
+						return previous;
+					}
+					return live != null
+							? live
+							: new MemeCategory(
+									categoryEntity.getCategoryKey(),
+									categoryEntity.getName(),
+									categoryEntity.getDescription(),
+									List.of()
+							);
+				})
+				.collect(Collectors.toList());
 	}
 
 	@Transactional
@@ -285,6 +329,36 @@ public class MemeCatalogService {
 						itemsByCategory.getOrDefault(category.getCategoryKey(), List.of())
 				))
 				.collect(Collectors.toList());
+	}
+
+	private void loadArchiveMonths(List<MemeCategoryEntity> categories) {
+		Map<YearMonth, MemeBatchEntity> latestBatchByMonth = new LinkedHashMap<>();
+		for (MemeBatchEntity batch : batchRepository.findAllByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS)) {
+			YearMonth month = YearMonth.from(batch.getRunDate());
+			latestBatchByMonth.putIfAbsent(month, batch);
+			if (latestBatchByMonth.size() >= MAX_ARCHIVE_MONTHS + 1) {
+				break;
+			}
+		}
+
+		List<MemeArchiveMonth> archives = new ArrayList<>();
+		boolean skipCurrent = true;
+		for (MemeBatchEntity batch : latestBatchByMonth.values()) {
+			if (skipCurrent) {
+				skipCurrent = false;
+				continue;
+			}
+			archives.add(new MemeArchiveMonth(
+					batch.getRunDate().format(MONTH_FORMATTER),
+					batch.getRunDate(),
+					mapPersistedCatalog(categories, loadSnapshots(batch.getId()))
+			));
+		}
+		cachedArchiveMonths = archives;
+	}
+
+	private List<MemeSnapshotEntity> loadSnapshots(Long batchId) {
+		return snapshotRepository.findAllByBatch_IdOrderByCategory_DisplayOrderAscRankOrderAscIdAsc(batchId);
 	}
 
 	private List<MemeItem> fetchRedditHot(String subreddit, int limit) {
@@ -562,9 +636,45 @@ public class MemeCatalogService {
 								1
 						)
 				)),
-				new MemeCategory("work", "Work", "Office and work-life meme trends", List.of()),
-				new MemeCategory("kpop", "K-POP", "K-pop fandom meme trends", List.of()),
-				new MemeCategory("sports", "Sports", "Sports reaction meme trends", List.of())
+				new MemeCategory("work", "Work", "Office and work-life meme trends", List.of(
+						new MemeItem(
+								"When the sprint board says 'just one quick fix'",
+								"image",
+								"/img/archive/work-2026-03.svg",
+								false,
+								"https://www.reddit.com/r/ProgrammerHumor/",
+								"Starter card kept until live sources return a newer work meme batch.",
+								"work, office, sprint",
+								"Archive Seed",
+								1
+						)
+				)),
+				new MemeCategory("kpop", "K-POP", "K-pop fandom meme trends", List.of(
+						new MemeItem(
+								"Bias changed again after one fancam",
+								"image",
+								"/img/archive/kpop-2026-03.svg",
+								false,
+								"https://www.reddit.com/r/kpoopheads/",
+								"Starter card kept until live sources return a newer K-pop meme batch.",
+								"kpop, fandom, fancam",
+								"Archive Seed",
+								1
+						)
+				)),
+				new MemeCategory("sports", "Sports", "Sports reaction meme trends", List.of(
+						new MemeItem(
+								"Team rebuilding for the fifth year in a row",
+								"image",
+								"/img/archive/sports-2026-03.svg",
+								false,
+								"https://www.reddit.com/r/sportsmemes/",
+								"Starter card kept until live sources return a newer sports meme batch.",
+								"sports, rebuild, reaction",
+								"Archive Seed",
+								1
+						)
+				))
 		);
 	}
 }

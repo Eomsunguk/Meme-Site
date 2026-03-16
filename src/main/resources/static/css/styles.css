@@ -73,7 +73,8 @@ body {
 
 .hero-text,
 .updated-at,
-.category-header p {
+.category-header p,
+.archive-header p {
     color: var(--ink-soft);
 }
 
@@ -120,6 +121,35 @@ body {
     margin-top: 28px;
     display: grid;
     gap: 34px;
+}
+
+.feed-section,
+.archive-section {
+    margin-top: 32px;
+}
+
+.section-heading h2,
+.archive-header h3 {
+    margin: 10px 0 4px;
+}
+
+.badge-soft {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--ink);
+    border: 1px solid var(--border);
+}
+
+.archive-stack {
+    display: grid;
+    gap: 28px;
+}
+
+.archive-month {
+    padding: 24px;
+    border: 1px solid var(--border);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(4px);
 }
 
 .category-header h2 {

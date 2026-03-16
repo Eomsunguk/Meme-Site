@@ -20,11 +20,11 @@
         <p class="badge">LIVE TREND FEED</p>
         <h1>Live Meme Feed by Category</h1>
         <p class="hero-text">
-            This feed is ranked by popularity signals and now shows image posts only.
+            This feed keeps the newest meme snapshot live and preserves older drops in a monthly archive.
         </p>
         <p class="updated-at">
             Last updated: <strong th:text="${lastUpdatedText}">2026-03-08</strong>
-            <span class="dot">•</span>
+            <span class="dot">&#8226;</span>
             Next auto refresh: <strong th:text="${nextUpdatedText}">2026-03-15</strong>
         </p>
         <div class="controls">
@@ -37,33 +37,85 @@
         </div>
     </section>
 
-    <section class="category-list">
-        <article class="category-block" th:each="category : ${categories}" th:attr="data-category=${category.key}">
-            <div class="category-header">
-                <h2 th:text="${category.name}">Category</h2>
-                <p th:text="${category.description}">Description</p>
-            </div>
-            <div class="meme-grid">
-                <div class="meme-card"
-                     th:each="meme : ${category.items}"
-                    th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
-                    <div class="media">
-                        <img th:if="${meme.type == 'image'}"
-                             th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
-                    </div>
-                    <div class="card-body">
-                        <div class="meta">
-                            <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
-                            <span class="source" th:text="${meme.source}">Reddit</span>
-                            <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+    <section class="feed-section">
+        <div class="section-heading">
+            <p class="badge badge-soft">CURRENT SNAPSHOT</p>
+            <h2 th:text="${currentMonthLabel}">March 2026</h2>
+        </div>
+        <div class="category-list">
+            <article class="category-block" th:each="category : ${categories}" th:attr="data-category=${category.key}">
+                <div class="category-header">
+                    <h2 th:text="${category.name}">Category</h2>
+                    <p th:text="${category.description}">Description</p>
+                </div>
+                <div class="meme-grid">
+                    <div class="meme-card"
+                         th:each="meme : ${category.items}"
+                         th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
+                        <div class="media">
+                            <img th:if="${meme.type == 'image'}"
+                                 th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
                         </div>
-                        <h3 th:text="${meme.title}">Title</h3>
-                        <p th:text="${meme.summary}">Summary</p>
-                        <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                        <div class="card-body">
+                            <div class="meta">
+                                <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
+                                <span class="source" th:text="${meme.source}">Reddit</span>
+                                <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+                            </div>
+                            <h3 th:text="${meme.title}">Title</h3>
+                            <p th:text="${meme.summary}">Summary</p>
+                            <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </article>
+            </article>
+        </div>
+    </section>
+
+    <section class="archive-section" th:if="${!#lists.isEmpty(archives)}">
+        <div class="section-heading">
+            <p class="badge badge-soft">MONTHLY ARCHIVE</p>
+            <h2>Past Meme Drops</h2>
+        </div>
+        <div class="archive-stack">
+            <section class="archive-month" th:each="archive : ${archives}">
+                <div class="archive-header">
+                    <h3 th:text="${archive.label}">February 2026</h3>
+                    <p>
+                        Snapshot kept from
+                        <strong th:text="${#temporals.format(archive.snapshotDate, 'yyyy-MM-dd')}">2026-02-01</strong>
+                    </p>
+                </div>
+                <div class="category-list">
+                    <article class="category-block" th:each="category : ${archive.categories}" th:attr="data-category=${category.key}">
+                        <div class="category-header">
+                            <h2 th:text="${category.name}">Category</h2>
+                            <p th:text="${category.description}">Description</p>
+                        </div>
+                        <div class="meme-grid">
+                            <div class="meme-card"
+                                 th:each="meme : ${category.items}"
+                                 th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
+                                <div class="media">
+                                    <img th:if="${meme.type == 'image'}"
+                                         th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
+                                </div>
+                                <div class="card-body">
+                                    <div class="meta">
+                                        <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
+                                        <span class="source" th:text="${meme.source}">Reddit</span>
+                                        <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+                                    </div>
+                                    <h3 th:text="${meme.title}">Title</h3>
+                                    <p th:text="${meme.summary}">Summary</p>
+                                    <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                                </div>
+                            </div>
+                        </div>
+                    </article>
+                </div>
+            </section>
+        </div>
     </section>
 </main>
 
