@@ -1,3 +1,0 @@
-[build]
-buildCommand = "chmod +x gradlew && ./gradlew bootJar"
-startCommand = "java -jar build/libs/*.jar"
