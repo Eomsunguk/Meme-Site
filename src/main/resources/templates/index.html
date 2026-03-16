@@ -53,6 +53,16 @@
                          th:each="meme : ${category.items}"
                          th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
                         <div class="media">
+                            <iframe th:if="${meme.embed}"
+                                    th:src="${meme.mediaUrl}"
+                                    title="meme video"
+                                    loading="lazy"
+                                    allowfullscreen></iframe>
+                            <video th:if="${!meme.embed and meme.type == 'video'}"
+                                   th:src="${meme.mediaUrl}"
+                                   controls
+                                   playsinline
+                                   preload="metadata"></video>
                             <img th:if="${meme.type == 'image'}"
                                  th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
                         </div>
@@ -97,6 +107,16 @@
                                  th:each="meme : ${category.items}"
                                  th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
                                 <div class="media">
+                                    <iframe th:if="${meme.embed}"
+                                            th:src="${meme.mediaUrl}"
+                                            title="meme video"
+                                            loading="lazy"
+                                            allowfullscreen></iframe>
+                                    <video th:if="${!meme.embed and meme.type == 'video'}"
+                                           th:src="${meme.mediaUrl}"
+                                           controls
+                                           playsinline
+                                           preload="metadata"></video>
                                     <img th:if="${meme.type == 'image'}"
                                          th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
                                 </div>

@@ -51,6 +51,8 @@ public class MemeCatalogService {
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final int MAX_ITEMS_PER_CATEGORY = 10;
 	private static final int MAX_ARCHIVE_WEEKS = 3;
+	private static final int DEFAULT_YOUTUBE_LIMIT = 5;
+	private static final int DEFAULT_INSTAGRAM_LIMIT = 5;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
 
 	private final MemeCategoryRepository categoryRepository;
@@ -70,6 +72,12 @@ public class MemeCatalogService {
 
 	@Value("${meme.x.bearer-token:}")
 	private String xBearerToken;
+
+	@Value("${meme.instagram.access-token:}")
+	private String instagramAccessToken;
+
+	@Value("${meme.instagram.user-id:}")
+	private String instagramUserId;
 
 	@Value("${meme.catalog.warm-up-enabled:true}")
 	private boolean warmUpEnabled;
@@ -177,7 +185,13 @@ public class MemeCatalogService {
 				.collect(Collectors.groupingBy(config -> config.getCategory().getId(), LinkedHashMap::new, Collectors.toList()));
 
 		for (MemeCategoryEntity category : categories) {
-			for (MemeSourceConfigEntity config : configsByCategory.getOrDefault(category.getId(), List.of())) {
+			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getId(), List.of()).stream()
+					.filter(config -> config.getSourceType() == SourceType.INSTAGRAM || config.getSourceType() == SourceType.YOUTUBE)
+					.collect(Collectors.toList());
+			if (effectiveConfigs.isEmpty()) {
+				effectiveConfigs = buildDefaultPreferredConfigs(category);
+			}
+			for (MemeSourceConfigEntity config : effectiveConfigs) {
 				bucket.get(category.getId()).addAll(fetchItems(config));
 			}
 		}
@@ -201,7 +215,12 @@ public class MemeCatalogService {
 
 	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
 		return switch (config.getSourceType()) {
-			case REDDIT -> fetchRedditHot(config.getQueryValue(), config.getFetchLimit());
+			case INSTAGRAM -> {
+				if (instagramAccessToken.isBlank() || instagramUserId.isBlank()) {
+					yield List.of();
+				}
+				yield fetchInstagramRecent(config.getQueryValue(), config.getFetchLimit());
+			}
 			case YOUTUBE -> {
 				if (youtubeApiKey.isBlank()) {
 					yield List.of();
@@ -211,13 +230,30 @@ public class MemeCatalogService {
 						: config.getRegionCode();
 				yield fetchYoutubePopular(config.getQueryValue(), regionCode, config.getFetchLimit());
 			}
-			case X -> {
-				if (xBearerToken.isBlank()) {
-					yield List.of();
-				}
-				yield fetchXPopular(config.getQueryValue(), config.getFetchLimit());
-			}
+			case REDDIT, X -> List.of();
 		};
+	}
+
+	private List<MemeSourceConfigEntity> buildDefaultPreferredConfigs(MemeCategoryEntity category) {
+		String key = category.getCategoryKey();
+		String youtubeQuery = switch (key) {
+			case "gaming" -> "gaming meme";
+			case "work" -> "office meme";
+			case "kpop" -> "kpop meme";
+			case "sports" -> "sports meme";
+			default -> category.getName() + " meme";
+		};
+		String instagramQuery = switch (key) {
+			case "gaming" -> "gamingmeme";
+			case "work" -> "workmemes";
+			case "kpop" -> "kpopmeme";
+			case "sports" -> "sportsmeme";
+			default -> category.getName().replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT) + "meme";
+		};
+		return List.of(
+				new InMemorySourceConfig(SourceType.INSTAGRAM, instagramQuery, DEFAULT_INSTAGRAM_LIMIT, null),
+				new InMemorySourceConfig(SourceType.YOUTUBE, youtubeQuery, DEFAULT_YOUTUBE_LIMIT, youtubeRegionCode)
+		);
 	}
 
 	private List<MemeCategory> mergeWithRecentHistory(List<MemeCategoryEntity> categories, List<MemeCategory> liveCatalog) {
@@ -516,6 +552,59 @@ public class MemeCatalogService {
 		return items;
 	}
 
+	private List<MemeItem> fetchInstagramRecent(String hashtag, int limit) {
+		List<MemeItem> items = new ArrayList<>();
+		try {
+			String normalizedHashtag = hashtag.replace("#", "");
+			String hashtagLookupUrl = "https://graph.facebook.com/v23.0/ig_hashtag_search"
+					+ "?user_id=" + URLEncoder.encode(instagramUserId, StandardCharsets.UTF_8)
+					+ "&q=" + URLEncoder.encode(normalizedHashtag, StandardCharsets.UTF_8)
+					+ "&access_token=" + URLEncoder.encode(instagramAccessToken, StandardCharsets.UTF_8);
+			JsonNode hashtagRoot = getJson(hashtagLookupUrl, Map.of());
+			String hashtagId = hashtagRoot.path("data").path(0).path("id").asText("");
+			if (hashtagId.isBlank()) {
+				return List.of();
+			}
+
+			String mediaLookupUrl = "https://graph.facebook.com/v23.0/" + hashtagId + "/recent_media"
+					+ "?user_id=" + URLEncoder.encode(instagramUserId, StandardCharsets.UTF_8)
+					+ "&fields=id,caption,like_count,media_type,media_url,permalink,thumbnail_url,timestamp"
+					+ "&limit=" + Math.max(limit, 1)
+					+ "&access_token=" + URLEncoder.encode(instagramAccessToken, StandardCharsets.UTF_8);
+			JsonNode mediaRoot = getJson(mediaLookupUrl, Map.of());
+			for (JsonNode media : mediaRoot.path("data")) {
+				String mediaType = media.path("media_type").asText("");
+				String displayUrl = switch (mediaType) {
+					case "IMAGE", "CAROUSEL_ALBUM" -> media.path("media_url").asText("");
+					case "VIDEO" -> media.path("thumbnail_url").asText("");
+					default -> "";
+				};
+				if (displayUrl.isBlank()) {
+					continue;
+				}
+				String caption = media.path("caption").asText("Instagram meme");
+				String title = caption.length() > 90 ? caption.substring(0, 90) + "..." : caption;
+				long likeCount = media.path("like_count").asLong(0L);
+				String permalink = media.path("permalink").asText("");
+				String timestamp = media.path("timestamp").asText("");
+				items.add(new MemeItem(
+						title,
+						"image",
+						displayUrl,
+						false,
+						permalink.isBlank() ? "https://www.instagram.com/explore/tags/" + normalizedHashtag + "/" : permalink,
+						"Instagram hashtag #" + normalizedHashtag + " / likes " + likeCount + " / " + truncate(timestamp, 30),
+						"instagram, #" + normalizedHashtag,
+						"Instagram",
+						likeCount
+				));
+			}
+		} catch (Exception ignored) {
+			return List.of();
+		}
+		return items;
+	}
+
 	private Map<String, Long> fetchYoutubeViews(List<String> videoIds) throws IOException, InterruptedException {
 		if (videoIds.isEmpty()) {
 			return Map.of();
@@ -681,7 +770,7 @@ public class MemeCatalogService {
 	}
 
 	private boolean isPlayableMedia(MemeItem item) {
-		return "image".equals(item.type());
+		return "image".equals(item.type()) || "video".equals(item.type()) || item.embed();
 	}
 
 	private String truncate(String value, int maxLength) {
@@ -746,5 +835,39 @@ public class MemeCatalogService {
 						)
 				))
 		);
+	}
+
+	private static final class InMemorySourceConfig extends MemeSourceConfigEntity {
+		private final SourceType sourceType;
+		private final String queryValue;
+		private final int fetchLimit;
+		private final String regionCode;
+
+		private InMemorySourceConfig(SourceType sourceType, String queryValue, int fetchLimit, String regionCode) {
+			this.sourceType = sourceType;
+			this.queryValue = queryValue;
+			this.fetchLimit = fetchLimit;
+			this.regionCode = regionCode;
+		}
+
+		@Override
+		public SourceType getSourceType() {
+			return sourceType;
+		}
+
+		@Override
+		public String getQueryValue() {
+			return queryValue;
+		}
+
+		@Override
+		public int getFetchLimit() {
+			return fetchLimit;
+		}
+
+		@Override
+		public String getRegionCode() {
+			return regionCode;
+		}
 	}
 }
