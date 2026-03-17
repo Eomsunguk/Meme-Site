@@ -11,12 +11,14 @@ import org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Locale;
 
 @Configuration
 public class MongoConfiguration {
 
 	private static final Logger log = LoggerFactory.getLogger(MongoConfiguration.class);
 	private static final String DEFAULT_DATABASE = "humor_project";
+	private static final String DEFAULT_AUTH_SOURCE = "admin";
 
 	@Bean
 	public MongoDatabaseFactory mongoDatabaseFactory(Environment environment) {
@@ -52,17 +54,36 @@ public class MongoConfiguration {
 	private static String ensureDatabaseName(String mongoUri) {
 		URI uri = URI.create(mongoUri);
 		String path = uri.getPath();
+		String query = ensureAuthSource(uri.getQuery());
 		if (path != null && !path.isBlank() && !"/".equals(path)) {
-			return mongoUri;
+			if (query.equals(uri.getQuery())) {
+				return mongoUri;
+			}
+			return rebuildUri(uri, path, query);
 		}
+		return rebuildUri(uri, "/" + DEFAULT_DATABASE, query);
+	}
+
+	private static String ensureAuthSource(String query) {
+		if (query == null || query.isBlank()) {
+			return "authSource=" + DEFAULT_AUTH_SOURCE;
+		}
+		String lowered = query.toLowerCase(Locale.ROOT);
+		if (lowered.contains("authsource=")) {
+			return query;
+		}
+		return query + "&authSource=" + DEFAULT_AUTH_SOURCE;
+	}
+
+	private static String rebuildUri(URI uri, String path, String query) {
 		try {
 			return new URI(
 					uri.getScheme(),
 					uri.getUserInfo(),
 					uri.getHost(),
 					uri.getPort(),
-					"/" + DEFAULT_DATABASE,
-					uri.getQuery(),
+					path,
+					query,
 					uri.getFragment()
 			).toString();
 		} catch (URISyntaxException exception) {
