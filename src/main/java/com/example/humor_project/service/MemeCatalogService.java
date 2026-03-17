@@ -24,14 +24,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
@@ -75,8 +73,17 @@ public class MemeCatalogService {
 	@Value("${meme.catalog.bootstrap-enabled:true}")
 	private boolean bootstrapEnabled;
 
-	@Value("${meme.media.storage-path:./data/meme-images}")
-	private String mediaStoragePath;
+	@Value("${meme.cloudinary.cloud-name:}")
+	private String cloudinaryCloudName;
+
+	@Value("${meme.cloudinary.api-key:}")
+	private String cloudinaryApiKey;
+
+	@Value("${meme.cloudinary.api-secret:}")
+	private String cloudinaryApiSecret;
+
+	@Value("${meme.cloudinary.folder:meme-pulse}")
+	private String cloudinaryFolder;
 
 	private volatile List<MemeCategory> cachedCategories = fallbackCatalog();
 	private volatile List<MemeArchiveMonth> cachedArchiveMonths = List.of();
@@ -100,7 +107,6 @@ public class MemeCatalogService {
 			return;
 		}
 		try {
-			ensureMediaDirectory();
 			ensureDefaultCatalogConfig();
 			loadPersistedCatalog();
 		} catch (Exception ignored) {
@@ -133,10 +139,6 @@ public class MemeCatalogService {
 		return lastUpdatedDate.plusWeeks(1);
 	}
 
-	public Path getMediaStorageRoot() {
-		return Path.of(mediaStoragePath).toAbsolutePath().normalize();
-	}
-
 	@Scheduled(cron = "${meme.refresh.cron:0 0 0 * * MON}", zone = "Asia/Seoul")
 	public void refreshWeekly() {
 		if (!bootstrapEnabled) {
@@ -146,7 +148,6 @@ public class MemeCatalogService {
 	}
 
 	private synchronized void refreshCatalogSafely(LocalDate refreshDate) {
-		ensureMediaDirectory();
 		Instant startedAt = Instant.now();
 		MemeBatchEntity batch;
 		try {
@@ -498,7 +499,7 @@ public class MemeCatalogService {
 					continue;
 				}
 
-				String storedMediaUrl = downloadAndStoreMedia(originalMediaUrl);
+				String storedMediaUrl = uploadToCloudinary(originalMediaUrl, subreddit);
 				if (storedMediaUrl.isBlank()) {
 					continue;
 				}
@@ -517,10 +518,10 @@ public class MemeCatalogService {
 						storedMediaUrl,
 						false,
 						sourceUrl,
-						"Weekly top image mirrored from r/" + subreddit + " / score " + score + " / comments " + comments
+						"Weekly top image mirrored to Cloudinary from r/" + subreddit + " / score " + score + " / comments " + comments
 								+ " / fetched " + DATE_FORMATTER.format(LocalDate.now(KST)),
 						subreddit + ", reddit",
-						"Reddit Mirror",
+						"Cloudinary Mirror",
 						score
 				));
 			}
@@ -594,59 +595,56 @@ public class MemeCatalogService {
 		return value.substring(0, maxLength);
 	}
 
-	private void ensureMediaDirectory() {
-		try {
-			Files.createDirectories(getMediaStorageRoot());
-		} catch (IOException exception) {
-			throw new IllegalStateException("Could not create media storage directory", exception);
+	private String uploadToCloudinary(String remoteUrl, String subreddit) {
+		if (cloudinaryCloudName.isBlank() || cloudinaryApiKey.isBlank() || cloudinaryApiSecret.isBlank()) {
+			return remoteUrl;
 		}
-	}
-
-	private String downloadAndStoreMedia(String remoteUrl) {
 		try {
-			String extension = determineExtension(remoteUrl);
-			String fileName = sha256(remoteUrl) + extension;
-			Path target = getMediaStorageRoot().resolve(fileName);
-			if (Files.exists(target)) {
-				return "/media/" + fileName;
-			}
-
-			HttpRequest request = HttpRequest.newBuilder(URI.create(remoteUrl))
-					.GET()
-					.timeout(Duration.ofSeconds(12))
-					.header("User-Agent", "meme-pulse/1.0")
+			long timestamp = Instant.now().getEpochSecond();
+			String publicId = sha256(subreddit + "|" + remoteUrl);
+			String folder = cloudinaryFolder + "/" + subreddit;
+			String signatureBase = "folder=" + folder + "&public_id=" + publicId + "&timestamp=" + timestamp + cloudinaryApiSecret;
+			String signature = sha1(signatureBase);
+			String form = "file=" + encode(remoteUrl)
+					+ "&folder=" + encode(folder)
+					+ "&public_id=" + encode(publicId)
+					+ "&timestamp=" + timestamp
+					+ "&api_key=" + encode(cloudinaryApiKey)
+					+ "&signature=" + encode(signature);
+			HttpRequest request = HttpRequest.newBuilder(URI.create(
+							"https://api.cloudinary.com/v1_1/" + cloudinaryCloudName + "/image/upload"))
+					.timeout(Duration.ofSeconds(15))
+					.header("Content-Type", "application/x-www-form-urlencoded")
+					.POST(HttpRequest.BodyPublishers.ofString(form))
 					.build();
-			HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 			if (response.statusCode() < 200 || response.statusCode() >= 300) {
 				return "";
 			}
-			try (InputStream body = response.body()) {
-				Files.copy(body, target, StandardCopyOption.REPLACE_EXISTING);
-			}
-			return "/media/" + fileName;
+			JsonNode root = objectMapper.readTree(response.body());
+			return root.path("secure_url").asText("");
 		} catch (Exception exception) {
 			return "";
 		}
 	}
 
-	private String determineExtension(String remoteUrl) {
-		String lower = remoteUrl.toLowerCase(Locale.ROOT);
-		if (lower.contains(".png")) {
-			return ".png";
-		}
-		if (lower.contains(".gif")) {
-			return ".gif";
-		}
-		if (lower.contains(".webp")) {
-			return ".webp";
-		}
-		return ".jpg";
+	private String encode(String value) {
+		return URLEncoder.encode(value, StandardCharsets.UTF_8);
 	}
 
 	private String sha256(String value) {
 		try {
 			MessageDigest digest = MessageDigest.getInstance("SHA-256");
 			return HexFormat.of().formatHex(digest.digest(value.getBytes()));
+		} catch (NoSuchAlgorithmException exception) {
+			throw new IllegalStateException(exception);
+		}
+	}
+
+	private String sha1(String value) {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-1");
+			return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
 		} catch (NoSuchAlgorithmException exception) {
 			throw new IllegalStateException(exception);
 		}
