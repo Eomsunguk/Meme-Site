@@ -1,33 +1,20 @@
 package com.example.humor_project.persistence.entity;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.mapping.Document;
 
-@Entity
-@Table(name = "meme_category")
+@Document("meme_categories")
 public class MemeCategoryEntity {
 
 	@Id
-	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	private Long id;
+	private String id;
 
-	@Column(name = "category_key", nullable = false, unique = true, length = 64)
+	@Indexed(unique = true)
 	private String categoryKey;
-
-	@Column(nullable = false, length = 120)
 	private String name;
-
-	@Column(nullable = false, length = 255)
 	private String description;
-
-	@Column(name = "display_order", nullable = false)
 	private int displayOrder;
-
-	@Column(nullable = false)
 	private boolean active;
 
 	protected MemeCategoryEntity() {
@@ -41,7 +28,7 @@ public class MemeCategoryEntity {
 		this.active = active;
 	}
 
-	public Long getId() {
+	public String getId() {
 		return id;
 	}
 

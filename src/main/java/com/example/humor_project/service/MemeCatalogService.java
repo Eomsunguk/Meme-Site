@@ -24,10 +24,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -37,6 +43,7 @@ import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,10 +66,17 @@ public class MemeCatalogService {
 	private final ObjectMapper objectMapper = new ObjectMapper();
 	private final HttpClient httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(5))
+			.followRedirects(HttpClient.Redirect.NORMAL)
 			.build();
 
 	@Value("${meme.catalog.warm-up-enabled:true}")
 	private boolean warmUpEnabled;
+
+	@Value("${meme.catalog.bootstrap-enabled:true}")
+	private boolean bootstrapEnabled;
+
+	@Value("${meme.media.storage-path:./data/meme-images}")
+	private String mediaStoragePath;
 
 	private volatile List<MemeCategory> cachedCategories = fallbackCatalog();
 	private volatile List<MemeArchiveMonth> cachedArchiveMonths = List.of();
@@ -82,13 +96,22 @@ public class MemeCatalogService {
 
 	@PostConstruct
 	public void warmUp() {
-		ensureDefaultCatalogConfig();
-		loadPersistedCatalog();
+		if (!bootstrapEnabled) {
+			return;
+		}
+		try {
+			ensureMediaDirectory();
+			ensureDefaultCatalogConfig();
+			loadPersistedCatalog();
+		} catch (Exception ignored) {
+			cachedCategories = fallbackCatalog();
+			cachedArchiveMonths = List.of();
+		}
 	}
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void triggerStartupRefresh() {
-		if (!warmUpEnabled) {
+		if (!bootstrapEnabled || !warmUpEnabled) {
 			return;
 		}
 		CompletableFuture.runAsync(() -> refreshCatalogSafely(LocalDate.now(KST)));
@@ -110,18 +133,27 @@ public class MemeCatalogService {
 		return lastUpdatedDate.plusWeeks(1);
 	}
 
+	public Path getMediaStorageRoot() {
+		return Path.of(mediaStoragePath).toAbsolutePath().normalize();
+	}
+
 	@Scheduled(cron = "${meme.refresh.cron:0 0 0 * * MON}", zone = "Asia/Seoul")
 	public void refreshWeekly() {
+		if (!bootstrapEnabled) {
+			return;
+		}
 		refreshCatalogSafely(LocalDate.now(KST));
 	}
 
 	private synchronized void refreshCatalogSafely(LocalDate refreshDate) {
-		ensureDefaultCatalogConfig();
+		ensureMediaDirectory();
 		Instant startedAt = Instant.now();
-		MemeBatchEntity batch = batchRepository.save(new MemeBatchEntity(refreshDate, startedAt, BatchStatus.RUNNING));
+		MemeBatchEntity batch;
 		try {
+			ensureDefaultCatalogConfig();
+			batch = batchRepository.save(new MemeBatchEntity(refreshDate, startedAt, BatchStatus.RUNNING));
 			List<MemeCategoryEntity> categories = categoryRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
-			List<MemeSourceConfigEntity> configs = sourceConfigRepository.findAllByActiveTrueOrderByCategory_DisplayOrderAscDisplayOrderAscIdAsc();
+			List<MemeSourceConfigEntity> configs = sourceConfigRepository.findAllByActiveTrueOrderByDisplayOrderAscIdAsc();
 			List<MemeCategory> liveCatalog = buildLiveCatalog(categories, configs);
 			List<MemeCategory> mergedCatalog = mergeWithRecentHistory(categories, liveCatalog);
 			int itemCount = mergedCatalog.stream().mapToInt(category -> category.items().size()).sum();
@@ -134,7 +166,9 @@ public class MemeCatalogService {
 			}
 			saveFailedBatch(batch, "No image memes fetched", Instant.now());
 		} catch (Exception exception) {
-			saveFailedBatch(batch, truncate(exception.getMessage(), 500), Instant.now());
+			cachedCategories = fallbackCatalog();
+			cachedArchiveMonths = List.of();
+			return;
 		}
 		loadPersistedCatalog();
 	}
@@ -166,49 +200,45 @@ public class MemeCatalogService {
 			return List.of();
 		}
 
-		Map<Long, List<MemeItem>> bucket = new LinkedHashMap<>();
+		Map<String, List<MemeItem>> bucket = new LinkedHashMap<>();
 		for (MemeCategoryEntity category : categories) {
-			bucket.put(category.getId(), new ArrayList<>());
+			bucket.put(category.getCategoryKey(), new ArrayList<>());
 		}
 
-		Map<Long, List<MemeSourceConfigEntity>> configsByCategory = configs.stream()
+		Map<String, List<MemeSourceConfigEntity>> configsByCategory = configs.stream()
 				.filter(config -> config.getSourceType() == SourceType.REDDIT)
-				.collect(Collectors.groupingBy(config -> config.getCategory().getId(), LinkedHashMap::new, Collectors.toList()));
+				.collect(Collectors.groupingBy(MemeSourceConfigEntity::getCategoryKey, LinkedHashMap::new, Collectors.toList()));
 
 		for (MemeCategoryEntity category : categories) {
-			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getId(), List.of());
+			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getCategoryKey(), List.of());
 			if (effectiveConfigs.isEmpty()) {
 				effectiveConfigs = buildDefaultPreferredConfigs(category);
 			}
 			for (MemeSourceConfigEntity config : effectiveConfigs) {
-				bucket.get(category.getId()).addAll(fetchItems(config));
+				bucket.get(category.getCategoryKey()).addAll(fetchItems(config));
 			}
 		}
 
-		List<MemeCategory> result = new ArrayList<>();
-		for (MemeCategoryEntity category : categories) {
-			List<MemeItem> selected = bucket.get(category.getId()).stream()
-					.filter(this::isImageOnly)
-					.collect(Collectors.toMap(
-							item -> item.sourceUrl() + "|" + item.title(),
-							item -> item,
-							(left, right) -> left,
-							LinkedHashMap::new
-					))
-					.values()
-					.stream()
-					.sorted(Comparator.comparingLong(MemeItem::popularity).reversed())
-					.limit(MAX_ITEMS_PER_CATEGORY)
-					.collect(Collectors.toList());
-
-			result.add(new MemeCategory(
-					category.getCategoryKey(),
-					category.getName(),
-					category.getDescription(),
-					selected
-			));
-		}
-		return result;
+		return categories.stream()
+				.map(category -> new MemeCategory(
+						category.getCategoryKey(),
+						category.getName(),
+						category.getDescription(),
+						bucket.getOrDefault(category.getCategoryKey(), List.of()).stream()
+								.filter(this::isImageOnly)
+								.collect(Collectors.toMap(
+										item -> item.sourceUrl() + "|" + item.title(),
+										item -> item,
+										(left, right) -> left,
+										LinkedHashMap::new
+								))
+								.values()
+								.stream()
+								.sorted(Comparator.comparingLong(MemeItem::popularity).reversed())
+								.limit(MAX_ITEMS_PER_CATEGORY)
+								.collect(Collectors.toList())
+				))
+				.collect(Collectors.toList());
 	}
 
 	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
@@ -221,7 +251,15 @@ public class MemeCatalogService {
 	private List<MemeSourceConfigEntity> buildDefaultPreferredConfigs(MemeCategoryEntity category) {
 		return defaultSourceSeeds().stream()
 				.filter(seed -> seed.categoryKey().equals(category.getCategoryKey()))
-				.map(seed -> new InMemorySourceConfig(seed.sourceType(), seed.queryValue(), seed.fetchLimit(), seed.regionCode()))
+				.map(seed -> new MemeSourceConfigEntity(
+						seed.categoryKey(),
+						seed.sourceType(),
+						seed.queryValue(),
+						seed.fetchLimit(),
+						seed.regionCode(),
+						seed.displayOrder(),
+						true
+				))
 				.collect(Collectors.toList());
 	}
 
@@ -264,15 +302,14 @@ public class MemeCatalogService {
 		List<MemeSnapshotEntity> snapshots = new ArrayList<>();
 		int itemCount = 0;
 		for (MemeCategory category : catalog) {
-			MemeCategoryEntity categoryEntity = categoryByKey.get(category.key());
-			if (categoryEntity == null) {
+			if (!categoryByKey.containsKey(category.key())) {
 				continue;
 			}
 			for (int index = 0; index < category.items().size(); index++) {
 				MemeItem item = category.items().get(index);
 				snapshots.add(new MemeSnapshotEntity(
-						batch,
-						categoryEntity,
+						batch.getId(),
+						category.key(),
 						truncate(item.title(), 255),
 						truncate(item.type(), 32),
 						truncate(item.mediaUrl(), 1000),
@@ -306,8 +343,7 @@ public class MemeCatalogService {
 			if (!isCuratedSnapshot(snapshot)) {
 				continue;
 			}
-			String categoryKey = snapshot.getCategory().getCategoryKey();
-			List<MemeItem> items = itemsByCategory.get(categoryKey);
+			List<MemeItem> items = itemsByCategory.get(snapshot.getCategoryKey());
 			if (items == null) {
 				continue;
 			}
@@ -370,8 +406,8 @@ public class MemeCatalogService {
 		cachedArchiveMonths = archives;
 	}
 
-	private List<MemeSnapshotEntity> loadSnapshots(Long batchId) {
-		return snapshotRepository.findAllByBatch_IdOrderByCategory_DisplayOrderAscRankOrderAscIdAsc(batchId);
+	private List<MemeSnapshotEntity> loadSnapshots(String batchId) {
+		return snapshotRepository.findAllByBatchIdOrderByCategoryKeyAscRankOrderAscIdAsc(batchId);
 	}
 
 	private Map<String, List<MemeItem>> buildHistoricalItemsByCategory(List<MemeCategoryEntity> categories, List<MemeBatchEntity> successfulBatches) {
@@ -387,8 +423,7 @@ public class MemeCatalogService {
 				if (!isCuratedSnapshot(snapshot)) {
 					continue;
 				}
-				String categoryKey = snapshot.getCategory().getCategoryKey();
-				Map<String, MemeItem> uniqueItems = uniqueByCategory.get(categoryKey);
+				Map<String, MemeItem> uniqueItems = uniqueByCategory.get(snapshot.getCategoryKey());
 				if (uniqueItems == null) {
 					continue;
 				}
@@ -455,11 +490,16 @@ public class MemeCatalogService {
 				if (data.path("over_18").asBoolean(false)) {
 					continue;
 				}
-				String mediaUrl = resolveRedditMediaUrl(data);
-				if (mediaUrl.isBlank()) {
+				String originalMediaUrl = resolveRedditMediaUrl(data);
+				if (originalMediaUrl.isBlank()) {
 					continue;
 				}
-				if (!"image".equals(inferMediaType(mediaUrl))) {
+				if (!"image".equals(inferMediaType(originalMediaUrl))) {
+					continue;
+				}
+
+				String storedMediaUrl = downloadAndStoreMedia(originalMediaUrl);
+				if (storedMediaUrl.isBlank()) {
 					continue;
 				}
 
@@ -474,13 +514,13 @@ public class MemeCatalogService {
 				items.add(new MemeItem(
 						title,
 						"image",
-						mediaUrl,
+						storedMediaUrl,
 						false,
 						sourceUrl,
-						"Weekly top image from r/" + subreddit + " / score " + score + " / comments " + comments
+						"Weekly top image mirrored from r/" + subreddit + " / score " + score + " / comments " + comments
 								+ " / fetched " + DATE_FORMATTER.format(LocalDate.now(KST)),
 						subreddit + ", reddit",
-						"Reddit",
+						"Reddit Mirror",
 						score
 				));
 			}
@@ -554,6 +594,64 @@ public class MemeCatalogService {
 		return value.substring(0, maxLength);
 	}
 
+	private void ensureMediaDirectory() {
+		try {
+			Files.createDirectories(getMediaStorageRoot());
+		} catch (IOException exception) {
+			throw new IllegalStateException("Could not create media storage directory", exception);
+		}
+	}
+
+	private String downloadAndStoreMedia(String remoteUrl) {
+		try {
+			String extension = determineExtension(remoteUrl);
+			String fileName = sha256(remoteUrl) + extension;
+			Path target = getMediaStorageRoot().resolve(fileName);
+			if (Files.exists(target)) {
+				return "/media/" + fileName;
+			}
+
+			HttpRequest request = HttpRequest.newBuilder(URI.create(remoteUrl))
+					.GET()
+					.timeout(Duration.ofSeconds(12))
+					.header("User-Agent", "meme-pulse/1.0")
+					.build();
+			HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+			if (response.statusCode() < 200 || response.statusCode() >= 300) {
+				return "";
+			}
+			try (InputStream body = response.body()) {
+				Files.copy(body, target, StandardCopyOption.REPLACE_EXISTING);
+			}
+			return "/media/" + fileName;
+		} catch (Exception exception) {
+			return "";
+		}
+	}
+
+	private String determineExtension(String remoteUrl) {
+		String lower = remoteUrl.toLowerCase(Locale.ROOT);
+		if (lower.contains(".png")) {
+			return ".png";
+		}
+		if (lower.contains(".gif")) {
+			return ".gif";
+		}
+		if (lower.contains(".webp")) {
+			return ".webp";
+		}
+		return ".jpg";
+	}
+
+	private String sha256(String value) {
+		try {
+			MessageDigest digest = MessageDigest.getInstance("SHA-256");
+			return HexFormat.of().formatHex(digest.digest(value.getBytes()));
+		} catch (NoSuchAlgorithmException exception) {
+			throw new IllegalStateException(exception);
+		}
+	}
+
 	private List<MemeCategory> fallbackCatalog() {
 		return List.of(
 				new MemeCategory("gaming", "Gaming", "Weekly top image memes from major gaming meme communities", List.of()),
@@ -568,38 +666,25 @@ public class MemeCatalogService {
 		Map<String, MemeCategoryEntity> categoryByKey = categoryRepository.findAll().stream()
 				.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category, (left, right) -> left, LinkedHashMap::new));
 
-		Map<String, MemeCategoryEntity> existingCategories = categoryByKey;
 		List<MemeCategoryEntity> categoriesToCreate = defaultCategorySeeds().stream()
-				.filter(seed -> !existingCategories.containsKey(seed.key()))
+				.filter(seed -> !categoryByKey.containsKey(seed.key()))
 				.map(seed -> new MemeCategoryEntity(seed.key(), seed.name(), seed.description(), seed.displayOrder(), true))
 				.collect(Collectors.toList());
 		if (!categoriesToCreate.isEmpty()) {
 			categoryRepository.saveAll(categoriesToCreate);
-			categoryByKey = categoryRepository.findAll().stream()
-					.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category, (left, right) -> left, LinkedHashMap::new));
 		}
 
-		Map<Long, String> categoryKeyById = categoryByKey.values().stream()
-				.collect(Collectors.toMap(MemeCategoryEntity::getId, MemeCategoryEntity::getCategoryKey, (left, right) -> left, LinkedHashMap::new));
 		Map<String, List<MemeSourceConfigEntity>> configsByCategory = sourceConfigRepository.findAll().stream()
-				.collect(Collectors.groupingBy(
-						config -> categoryKeyById.get(config.getCategory().getId()),
-						LinkedHashMap::new,
-						Collectors.toList()
-				));
+				.collect(Collectors.groupingBy(MemeSourceConfigEntity::getCategoryKey, LinkedHashMap::new, Collectors.toList()));
 
 		List<MemeSourceConfigEntity> configsToCreate = new ArrayList<>();
 		for (SourceSeed seed : defaultSourceSeeds()) {
-			MemeCategoryEntity category = categoryByKey.get(seed.categoryKey());
-			if (category == null) {
-				continue;
-			}
 			boolean exists = configsByCategory.getOrDefault(seed.categoryKey(), List.of()).stream()
 					.anyMatch(config -> config.getSourceType() == seed.sourceType()
 							&& seed.queryValue().equals(config.getQueryValue()));
 			if (!exists) {
 				configsToCreate.add(new MemeSourceConfigEntity(
-						category,
+						seed.categoryKey(),
 						seed.sourceType(),
 						seed.queryValue(),
 						seed.fetchLimit(),
@@ -633,40 +718,6 @@ public class MemeCatalogService {
 				new SourceSeed("sports", SourceType.REDDIT, "sportsmemes", 10, null, 1),
 				new SourceSeed("sports", SourceType.REDDIT, "nbamemes", 10, null, 2)
 		);
-	}
-
-	private static final class InMemorySourceConfig extends MemeSourceConfigEntity {
-		private final SourceType sourceType;
-		private final String queryValue;
-		private final int fetchLimit;
-		private final String regionCode;
-
-		private InMemorySourceConfig(SourceType sourceType, String queryValue, int fetchLimit, String regionCode) {
-			this.sourceType = sourceType;
-			this.queryValue = queryValue;
-			this.fetchLimit = fetchLimit;
-			this.regionCode = regionCode;
-		}
-
-		@Override
-		public SourceType getSourceType() {
-			return sourceType;
-		}
-
-		@Override
-		public String getQueryValue() {
-			return queryValue;
-		}
-
-		@Override
-		public int getFetchLimit() {
-			return fetchLimit;
-		}
-
-		@Override
-		public String getRegionCode() {
-			return regionCode;
-		}
 	}
 
 	private record CategorySeed(String key, String name, String description, int displayOrder) {

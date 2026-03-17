@@ -1,43 +1,22 @@
 package com.example.humor_project.persistence.entity;
 
 import com.example.humor_project.model.BatchStatus;
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.EnumType;
-import jakarta.persistence.Enumerated;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
+import org.springframework.data.annotation.Id;
+import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 import java.time.LocalDate;
 
-@Entity
-@Table(name = "meme_batch")
+@Document("meme_batches")
 public class MemeBatchEntity {
 
 	@Id
-	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	private Long id;
-
-	@Column(name = "run_date", nullable = false)
+	private String id;
 	private LocalDate runDate;
-
-	@Column(name = "started_at", nullable = false)
 	private Instant startedAt;
-
-	@Column(name = "ended_at")
 	private Instant endedAt;
-
-	@Enumerated(EnumType.STRING)
-	@Column(nullable = false, length = 32)
 	private BatchStatus status;
-
-	@Column(length = 500)
 	private String message;
-
-	@Column(name = "item_count", nullable = false)
 	private int itemCount;
 
 	protected MemeBatchEntity() {
@@ -49,7 +28,7 @@ public class MemeBatchEntity {
 		this.status = status;
 	}
 
-	public Long getId() {
+	public String getId() {
 		return id;
 	}
 
