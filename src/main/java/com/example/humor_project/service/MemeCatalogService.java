@@ -571,8 +571,14 @@ public class MemeCatalogService {
 					.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category, (left, right) -> left, LinkedHashMap::new));
 		}
 
+		Map<Long, String> categoryKeyById = categoryByKey.values().stream()
+				.collect(Collectors.toMap(MemeCategoryEntity::getId, MemeCategoryEntity::getCategoryKey, (left, right) -> left, LinkedHashMap::new));
 		Map<String, List<MemeSourceConfigEntity>> configsByCategory = sourceConfigRepository.findAll().stream()
-				.collect(Collectors.groupingBy(config -> config.getCategory().getCategoryKey(), LinkedHashMap::new, Collectors.toList()));
+				.collect(Collectors.groupingBy(
+						config -> categoryKeyById.get(config.getCategory().getId()),
+						LinkedHashMap::new,
+						Collectors.toList()
+				));
 
 		List<MemeSourceConfigEntity> configsToCreate = new ArrayList<>();
 		for (SourceSeed seed : defaultSourceSeeds()) {
