@@ -708,8 +708,13 @@ public class MemeCatalogService {
 
 	private List<SourceSeed> defaultSourceSeeds() {
 		return List.of(
-				new SourceSeed("gaming", SourceType.REDDIT, "gamingmemes", 10, null, 1),
-				new SourceSeed("gaming", SourceType.REDDIT, "videogamememes", 10, null, 2),
+				new SourceSeed("gaming", SourceType.REDDIT, "gamingmemes", 18, null, 1),
+				new SourceSeed("gaming", SourceType.REDDIT, "videogamememes", 18, null, 2),
+				new SourceSeed("gaming", SourceType.REDDIT, "pcmasterrace", 18, null, 3),
+				new SourceSeed("gaming", SourceType.REDDIT, "nintendomemes", 18, null, 4),
+				new SourceSeed("gaming", SourceType.REDDIT, "minecraftmemes", 18, null, 5),
+				new SourceSeed("gaming", SourceType.REDDIT, "pokememes", 18, null, 6),
+				new SourceSeed("gaming", SourceType.REDDIT, "haloMemes", 18, null, 7),
 				new SourceSeed("work", SourceType.REDDIT, "workmemes", 10, null, 1),
 				new SourceSeed("work", SourceType.REDDIT, "ProgrammerHumor", 10, null, 2),
 				new SourceSeed("kpop", SourceType.REDDIT, "kpoopheads", 10, null, 1),
