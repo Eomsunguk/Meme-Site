@@ -17,6 +17,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +42,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 @Service
@@ -81,9 +84,14 @@ public class MemeCatalogService {
 	public void warmUp() {
 		ensureDefaultCatalogConfig();
 		loadPersistedCatalog();
-		if (warmUpEnabled) {
-			refreshCatalogSafely(LocalDate.now(KST));
+	}
+
+	@EventListener(ApplicationReadyEvent.class)
+	public void triggerStartupRefresh() {
+		if (!warmUpEnabled) {
+			return;
 		}
+		CompletableFuture.runAsync(() -> refreshCatalogSafely(LocalDate.now(KST)));
 	}
 
 	public List<MemeCategory> getTrendingCategories() {
