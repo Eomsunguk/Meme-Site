@@ -20,7 +20,7 @@
         <p class="badge">LIVE TREND FEED</p>
         <h1>Live Meme Feed by Category</h1>
         <p class="hero-text">
-            This feed keeps about 10 memes per category live and opens weekly archive shelves for older drops.
+            This feed keeps about 10 image memes per category from public meme communities and stores weekly snapshots for the archive.
         </p>
         <p class="updated-at">
             Last updated: <strong th:text="${lastUpdatedText}">2026-03-08</strong>
@@ -53,18 +53,8 @@
                          th:each="meme : ${category.items}"
                          th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
                         <div class="media">
-                            <iframe th:if="${meme.embed}"
-                                    th:src="${meme.mediaUrl}"
-                                    title="meme video"
-                                    loading="lazy"
-                                    allowfullscreen></iframe>
-                            <video th:if="${!meme.embed and meme.type == 'video'}"
-                                   th:src="${meme.mediaUrl}"
-                                   controls
-                                   playsinline
-                                   preload="metadata"></video>
                             <img th:if="${meme.type == 'image'}"
-                                 th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
+                                 th:src="${meme.mediaUrl}" th:alt="${meme.title}" loading="lazy">
                         </div>
                         <div class="card-body">
                             <div class="meta">
@@ -107,18 +97,8 @@
                                  th:each="meme : ${category.items}"
                                  th:attr="data-title=${meme.title},data-tags=${meme.tags},data-type=${meme.type}">
                                 <div class="media">
-                                    <iframe th:if="${meme.embed}"
-                                            th:src="${meme.mediaUrl}"
-                                            title="meme video"
-                                            loading="lazy"
-                                            allowfullscreen></iframe>
-                                    <video th:if="${!meme.embed and meme.type == 'video'}"
-                                           th:src="${meme.mediaUrl}"
-                                           controls
-                                           playsinline
-                                           preload="metadata"></video>
                                     <img th:if="${meme.type == 'image'}"
-                                         th:src="${meme.mediaUrl}" alt="meme media" loading="lazy">
+                                         th:src="${meme.mediaUrl}" th:alt="${meme.title}" loading="lazy">
                                 </div>
                                 <div class="card-body">
                                     <div class="meta">

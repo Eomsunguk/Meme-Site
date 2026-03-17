@@ -33,6 +33,14 @@ public class MemeCategoryEntity {
 	protected MemeCategoryEntity() {
 	}
 
+	public MemeCategoryEntity(String categoryKey, String name, String description, int displayOrder, boolean active) {
+		this.categoryKey = categoryKey;
+		this.name = name;
+		this.description = description;
+		this.displayOrder = displayOrder;
+		this.active = active;
+	}
+
 	public Long getId() {
 		return id;
 	}

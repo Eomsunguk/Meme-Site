@@ -23,18 +23,16 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -42,7 +40,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
@@ -50,8 +47,6 @@ public class MemeCatalogService {
 
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final int MAX_ITEMS_PER_CATEGORY = 10;
-	private static final int MAX_ARCHIVE_WEEKS = 3;
-	private static final int DEFAULT_IMGFLIP_LIMIT = 10;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
 
 	private final MemeCategoryRepository categoryRepository;
@@ -62,21 +57,6 @@ public class MemeCatalogService {
 	private final HttpClient httpClient = HttpClient.newBuilder()
 			.connectTimeout(Duration.ofSeconds(5))
 			.build();
-
-	@Value("${meme.youtube.api-key:}")
-	private String youtubeApiKey;
-
-	@Value("${meme.youtube.region-code:KR}")
-	private String youtubeRegionCode;
-
-	@Value("${meme.x.bearer-token:}")
-	private String xBearerToken;
-
-	@Value("${meme.instagram.access-token:}")
-	private String instagramAccessToken;
-
-	@Value("${meme.instagram.user-id:}")
-	private String instagramUserId;
 
 	@Value("${meme.catalog.warm-up-enabled:true}")
 	private boolean warmUpEnabled;
@@ -99,6 +79,7 @@ public class MemeCatalogService {
 
 	@PostConstruct
 	public void warmUp() {
+		ensureDefaultCatalogConfig();
 		loadPersistedCatalog();
 		if (warmUpEnabled) {
 			refreshCatalogSafely(LocalDate.now(KST));
@@ -127,6 +108,7 @@ public class MemeCatalogService {
 	}
 
 	private synchronized void refreshCatalogSafely(LocalDate refreshDate) {
+		ensureDefaultCatalogConfig();
 		Instant startedAt = Instant.now();
 		MemeBatchEntity batch = batchRepository.save(new MemeBatchEntity(refreshDate, startedAt, BatchStatus.RUNNING));
 		try {
@@ -142,7 +124,7 @@ public class MemeCatalogService {
 				loadArchiveMonths(categories);
 				return;
 			}
-			saveFailedBatch(batch, "No playable meme items fetched", Instant.now());
+			saveFailedBatch(batch, "No image memes fetched", Instant.now());
 		} catch (Exception exception) {
 			saveFailedBatch(batch, truncate(exception.getMessage(), 500), Instant.now());
 		}
@@ -175,18 +157,18 @@ public class MemeCatalogService {
 		if (categories.isEmpty()) {
 			return List.of();
 		}
+
 		Map<Long, List<MemeItem>> bucket = new LinkedHashMap<>();
 		for (MemeCategoryEntity category : categories) {
 			bucket.put(category.getId(), new ArrayList<>());
 		}
 
 		Map<Long, List<MemeSourceConfigEntity>> configsByCategory = configs.stream()
+				.filter(config -> config.getSourceType() == SourceType.REDDIT)
 				.collect(Collectors.groupingBy(config -> config.getCategory().getId(), LinkedHashMap::new, Collectors.toList()));
 
 		for (MemeCategoryEntity category : categories) {
-			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getId(), List.of()).stream()
-					.filter(config -> config.getSourceType() == SourceType.IMGFLIP)
-					.collect(Collectors.toList());
+			List<MemeSourceConfigEntity> effectiveConfigs = configsByCategory.getOrDefault(category.getId(), List.of());
 			if (effectiveConfigs.isEmpty()) {
 				effectiveConfigs = buildDefaultPreferredConfigs(category);
 			}
@@ -198,10 +180,19 @@ public class MemeCatalogService {
 		List<MemeCategory> result = new ArrayList<>();
 		for (MemeCategoryEntity category : categories) {
 			List<MemeItem> selected = bucket.get(category.getId()).stream()
-					.filter(this::isPlayableMedia)
+					.filter(this::isImageOnly)
+					.collect(Collectors.toMap(
+							item -> item.sourceUrl() + "|" + item.title(),
+							item -> item,
+							(left, right) -> left,
+							LinkedHashMap::new
+					))
+					.values()
+					.stream()
 					.sorted(Comparator.comparingLong(MemeItem::popularity).reversed())
 					.limit(MAX_ITEMS_PER_CATEGORY)
 					.collect(Collectors.toList());
+
 			result.add(new MemeCategory(
 					category.getCategoryKey(),
 					category.getName(),
@@ -213,38 +204,17 @@ public class MemeCatalogService {
 	}
 
 	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
-		return switch (config.getSourceType()) {
-			case IMGFLIP -> fetchImgflipPopular(config.getQueryValue(), config.getFetchLimit());
-			case INSTAGRAM -> {
-				if (instagramAccessToken.isBlank() || instagramUserId.isBlank()) {
-					yield List.of();
-				}
-				yield fetchInstagramRecent(config.getQueryValue(), config.getFetchLimit());
-			}
-			case YOUTUBE -> {
-				if (youtubeApiKey.isBlank()) {
-					yield List.of();
-				}
-				String regionCode = config.getRegionCode() == null || config.getRegionCode().isBlank()
-						? youtubeRegionCode
-						: config.getRegionCode();
-				yield fetchYoutubePopular(config.getQueryValue(), regionCode, config.getFetchLimit());
-			}
-			case REDDIT, X -> List.of();
-		};
+		if (config.getSourceType() != SourceType.REDDIT) {
+			return List.of();
+		}
+		return fetchRedditTopImages(config.getQueryValue(), config.getFetchLimit());
 	}
 
 	private List<MemeSourceConfigEntity> buildDefaultPreferredConfigs(MemeCategoryEntity category) {
-		int offset = switch (category.getCategoryKey()) {
-			case "gaming" -> 0;
-			case "work" -> 10;
-			case "kpop" -> 20;
-			case "sports" -> 30;
-			default -> 0;
-		};
-		return List.of(
-				new InMemorySourceConfig(SourceType.IMGFLIP, "offset:" + offset, DEFAULT_IMGFLIP_LIMIT, null)
-		);
+		return defaultSourceSeeds().stream()
+				.filter(seed -> seed.categoryKey().equals(category.getCategoryKey()))
+				.map(seed -> new InMemorySourceConfig(seed.sourceType(), seed.queryValue(), seed.fetchLimit(), seed.regionCode()))
+				.collect(Collectors.toList());
 	}
 
 	private List<MemeCategory> mergeWithRecentHistory(List<MemeCategoryEntity> categories, List<MemeCategory> liveCatalog) {
@@ -367,9 +337,6 @@ public class MemeCatalogService {
 		for (MemeBatchEntity batch : successfulBatches) {
 			LocalDate weekStart = startOfWeek(batch.getRunDate());
 			latestBatchByWeek.putIfAbsent(weekStart, batch);
-			if (latestBatchByWeek.size() >= MAX_ARCHIVE_WEEKS + 1) {
-				break;
-			}
 		}
 
 		List<MemeArchiveMonth> archives = new ArrayList<>();
@@ -470,44 +437,40 @@ public class MemeCatalogService {
 		return weeksBetween + " Weeks Ago";
 	}
 
-	private String toWeeklyLabel(LocalDate currentDate, LocalDate snapshotDate) {
-		long weeksBetween = ChronoUnit.WEEKS.between(startOfWeek(snapshotDate), startOfWeek(currentDate));
-		if (weeksBetween <= 1) {
-			return "지난주";
-		}
-		if (weeksBetween == 2) {
-			return "지지난주";
-		}
-		return weeksBetween + "주 전";
-	}
-
-	private List<MemeItem> fetchRedditHot(String subreddit, int limit) {
+	private List<MemeItem> fetchRedditTopImages(String subreddit, int limit) {
 		List<MemeItem> items = new ArrayList<>();
-		String url = "https://www.reddit.com/r/" + subreddit + "/hot.json?raw_json=1&limit=" + limit;
+		String url = "https://www.reddit.com/r/" + subreddit + "/top.json?t=week&raw_json=1&limit=" + Math.max(limit, 1);
 		try {
 			JsonNode root = getJson(url, Map.of("User-Agent", "meme-pulse/1.0"));
 			for (JsonNode child : root.path("data").path("children")) {
 				JsonNode data = child.path("data");
+				if (data.path("over_18").asBoolean(false)) {
+					continue;
+				}
 				String mediaUrl = resolveRedditMediaUrl(data);
 				if (mediaUrl.isBlank()) {
 					continue;
 				}
+				if (!"image".equals(inferMediaType(mediaUrl))) {
+					continue;
+				}
 
-				String type = inferMediaType(mediaUrl);
 				long score = data.path("score").asLong(0);
 				long comments = data.path("num_comments").asLong(0);
 				String title = data.path("title").asText("Untitled");
 				String permalink = data.path("permalink").asText("");
-				String sourceUrl = permalink.isBlank() ? "https://www.reddit.com/r/" + subreddit
+				String sourceUrl = permalink.isBlank()
+						? "https://www.reddit.com/r/" + subreddit
 						: "https://www.reddit.com" + permalink;
 
 				items.add(new MemeItem(
 						title,
-						type,
+						"image",
 						mediaUrl,
 						false,
 						sourceUrl,
-						"Reddit score " + score + " / comments " + comments + " / fetched " + DATE_FORMATTER.format(LocalDate.now(KST)),
+						"Weekly top image from r/" + subreddit + " / score " + score + " / comments " + comments
+								+ " / fetched " + DATE_FORMATTER.format(LocalDate.now(KST)),
 						subreddit + ", reddit",
 						"Reddit",
 						score
@@ -517,247 +480,6 @@ public class MemeCatalogService {
 			return List.of();
 		}
 		return items;
-	}
-
-	private List<MemeItem> fetchYoutubePopular(String query, String regionCode, int limit) {
-		List<MemeItem> items = new ArrayList<>();
-		try {
-			String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
-			String publishedAfter = Instant.now().minus(Duration.ofDays(30)).toString();
-			String searchUrl = "https://www.googleapis.com/youtube/v3/search"
-					+ "?part=snippet&type=video&maxResults=" + limit
-					+ "&order=viewCount&regionCode=" + regionCode
-					+ "&publishedAfter=" + URLEncoder.encode(publishedAfter, StandardCharsets.UTF_8)
-					+ "&q=" + encodedQuery
-					+ "&key=" + youtubeApiKey;
-
-			JsonNode search = getJson(searchUrl, Map.of());
-			List<String> videoIds = new ArrayList<>();
-			for (JsonNode item : search.path("items")) {
-				String id = item.path("id").path("videoId").asText("");
-				if (!id.isBlank()) {
-					videoIds.add(id);
-				}
-			}
-
-			Map<String, Long> views = fetchYoutubeViews(videoIds);
-			for (JsonNode item : search.path("items")) {
-				String videoId = item.path("id").path("videoId").asText("");
-				if (videoId.isBlank()) {
-					continue;
-				}
-				String title = item.path("snippet").path("title").asText("YouTube meme");
-				long viewCount = views.getOrDefault(videoId, 0L);
-				items.add(new MemeItem(
-						title,
-						"video",
-						"https://www.youtube.com/embed/" + videoId,
-						true,
-						"https://www.youtube.com/watch?v=" + videoId,
-						"YouTube views " + viewCount,
-						"youtube, meme",
-						"YouTube",
-						viewCount
-				));
-			}
-		} catch (Exception ignored) {
-			return List.of();
-		}
-		return items;
-	}
-
-	private List<MemeItem> fetchImgflipPopular(String queryValue, int limit) {
-		List<MemeItem> items = new ArrayList<>();
-		try {
-			int offset = parseOffset(queryValue);
-			JsonNode root = getJson("https://api.imgflip.com/get_memes", Map.of());
-			JsonNode memes = root.path("data").path("memes");
-			if (!memes.isArray()) {
-				return List.of();
-			}
-			for (int index = offset; index < memes.size() && items.size() < Math.max(limit, 1); index++) {
-				JsonNode meme = memes.get(index);
-				String imageUrl = meme.path("url").asText("");
-				if (imageUrl.isBlank()) {
-					continue;
-				}
-				String name = meme.path("name").asText("Imgflip meme");
-				long views = meme.path("box_count").asLong(0L) * 100L + Math.max(0, memes.size() - index);
-				String id = meme.path("id").asText("");
-				items.add(new MemeItem(
-						name,
-						"image",
-						imageUrl,
-						false,
-						id.isBlank() ? imageUrl : "https://imgflip.com/memetemplate/" + id,
-						"Popular humor image from Imgflip's meme catalog",
-						"imgflip, humor, popular",
-						"Imgflip",
-						views
-				));
-			}
-		} catch (Exception ignored) {
-			return List.of();
-		}
-		return items;
-	}
-
-	private List<MemeItem> fetchInstagramRecent(String hashtag, int limit) {
-		List<MemeItem> items = new ArrayList<>();
-		try {
-			String normalizedHashtag = hashtag.replace("#", "");
-			String hashtagLookupUrl = "https://graph.facebook.com/v23.0/ig_hashtag_search"
-					+ "?user_id=" + URLEncoder.encode(instagramUserId, StandardCharsets.UTF_8)
-					+ "&q=" + URLEncoder.encode(normalizedHashtag, StandardCharsets.UTF_8)
-					+ "&access_token=" + URLEncoder.encode(instagramAccessToken, StandardCharsets.UTF_8);
-			JsonNode hashtagRoot = getJson(hashtagLookupUrl, Map.of());
-			String hashtagId = hashtagRoot.path("data").path(0).path("id").asText("");
-			if (hashtagId.isBlank()) {
-				return List.of();
-			}
-
-			String mediaLookupUrl = "https://graph.facebook.com/v23.0/" + hashtagId + "/recent_media"
-					+ "?user_id=" + URLEncoder.encode(instagramUserId, StandardCharsets.UTF_8)
-					+ "&fields=id,caption,like_count,media_type,media_url,permalink,thumbnail_url,timestamp"
-					+ "&limit=" + Math.max(limit, 1)
-					+ "&access_token=" + URLEncoder.encode(instagramAccessToken, StandardCharsets.UTF_8);
-			JsonNode mediaRoot = getJson(mediaLookupUrl, Map.of());
-			for (JsonNode media : mediaRoot.path("data")) {
-				String mediaType = media.path("media_type").asText("");
-				String displayUrl = switch (mediaType) {
-					case "IMAGE", "CAROUSEL_ALBUM" -> media.path("media_url").asText("");
-					case "VIDEO" -> media.path("thumbnail_url").asText("");
-					default -> "";
-				};
-				if (displayUrl.isBlank()) {
-					continue;
-				}
-				String caption = media.path("caption").asText("Instagram meme");
-				String title = caption.length() > 90 ? caption.substring(0, 90) + "..." : caption;
-				long likeCount = media.path("like_count").asLong(0L);
-				String permalink = media.path("permalink").asText("");
-				String timestamp = media.path("timestamp").asText("");
-				items.add(new MemeItem(
-						title,
-						"image",
-						displayUrl,
-						false,
-						permalink.isBlank() ? "https://www.instagram.com/explore/tags/" + normalizedHashtag + "/" : permalink,
-						"Instagram hashtag #" + normalizedHashtag + " / likes " + likeCount + " / " + truncate(timestamp, 30),
-						"instagram, #" + normalizedHashtag,
-						"Instagram",
-						likeCount
-				));
-			}
-		} catch (Exception ignored) {
-			return List.of();
-		}
-		return items;
-	}
-
-	private Map<String, Long> fetchYoutubeViews(List<String> videoIds) throws IOException, InterruptedException {
-		if (videoIds.isEmpty()) {
-			return Map.of();
-		}
-		String ids = URLEncoder.encode(String.join(",", videoIds), StandardCharsets.UTF_8);
-		String url = "https://www.googleapis.com/youtube/v3/videos?part=statistics&id=" + ids + "&key=" + youtubeApiKey;
-		JsonNode root = getJson(url, Map.of());
-		Map<String, Long> result = new ConcurrentHashMap<>();
-		for (JsonNode item : root.path("items")) {
-			String id = item.path("id").asText("");
-			long views = item.path("statistics").path("viewCount").asLong(0L);
-			if (!id.isBlank()) {
-				result.put(id, views);
-			}
-		}
-		return result;
-	}
-
-	private List<MemeItem> fetchXPopular(String query, int limit) {
-		List<MemeItem> items = new ArrayList<>();
-		try {
-			String encodedQuery = URLEncoder.encode(query, StandardCharsets.UTF_8);
-			String url = "https://api.x.com/2/tweets/search/recent"
-					+ "?query=" + encodedQuery
-					+ "&max_results=" + Math.min(Math.max(limit, 10), 100)
-					+ "&expansions=attachments.media_keys"
-					+ "&tweet.fields=public_metrics,text,attachments"
-					+ "&media.fields=media_key,type,url,preview_image_url,variants";
-
-			JsonNode root = getJson(url, Map.of("Authorization", "Bearer " + xBearerToken));
-			Map<String, JsonNode> mediaByKey = new LinkedHashMap<>();
-			for (JsonNode media : root.path("includes").path("media")) {
-				String key = media.path("media_key").asText("");
-				if (!key.isBlank()) {
-					mediaByKey.put(key, media);
-				}
-			}
-
-			for (JsonNode tweet : root.path("data")) {
-				JsonNode keys = tweet.path("attachments").path("media_keys");
-				if (!keys.isArray() || keys.isEmpty()) {
-					continue;
-				}
-				String mediaKey = keys.get(0).asText("");
-				JsonNode media = mediaByKey.get(mediaKey);
-				if (media == null) {
-					continue;
-				}
-
-				String mediaType = media.path("type").asText("");
-				String mediaUrl = "";
-				String type = "image";
-				if ("photo".equals(mediaType)) {
-					mediaUrl = media.path("url").asText("");
-				} else if ("animated_gif".equals(mediaType) || "video".equals(mediaType)) {
-					mediaUrl = resolveXVideoVariant(media.path("variants"));
-					type = mediaType.equals("animated_gif") ? "gif" : "video";
-				}
-				if (mediaUrl.isBlank()) {
-					continue;
-				}
-
-				long likes = tweet.path("public_metrics").path("like_count").asLong(0);
-				long reposts = tweet.path("public_metrics").path("retweet_count").asLong(0);
-				long popularity = likes + reposts;
-				String id = tweet.path("id").asText("");
-				String text = tweet.path("text").asText("X meme");
-				String shortText = text.length() > 120 ? text.substring(0, 120) + "..." : text;
-
-				items.add(new MemeItem(
-						shortText,
-						type,
-						mediaUrl,
-						false,
-						"https://x.com/i/web/status/" + id,
-						"X likes " + likes + " / reposts " + reposts,
-						"x, trending",
-						"X",
-						popularity
-				));
-			}
-		} catch (Exception ignored) {
-			return List.of();
-		}
-		return items;
-	}
-
-	private String resolveXVideoVariant(JsonNode variants) {
-		String best = "";
-		int bestBitrate = -1;
-		for (JsonNode variant : variants) {
-			String contentType = variant.path("content_type").asText("");
-			if (!"video/mp4".equals(contentType)) {
-				continue;
-			}
-			int bitrate = variant.path("bit_rate").asInt(0);
-			String url = variant.path("url").asText("");
-			if (!url.isBlank() && bitrate >= bestBitrate) {
-				bestBitrate = bitrate;
-				best = url;
-			}
-		}
-		return best;
 	}
 
 	private JsonNode getJson(String url, Map<String, String> headers) throws IOException, InterruptedException {
@@ -780,10 +502,6 @@ public class MemeCatalogService {
 		if (isLikelyMediaUrl(direct)) {
 			return sanitizeMediaUrl(direct);
 		}
-		String fallbackVideo = data.path("media").path("reddit_video").path("fallback_url").asText("");
-		if (!fallbackVideo.isBlank()) {
-			return sanitizeMediaUrl(fallbackVideo);
-		}
 		String preview = data.path("preview").path("images").path(0).path("source").path("url").asText("");
 		if (isLikelyMediaUrl(preview)) {
 			return sanitizeMediaUrl(preview);
@@ -794,13 +512,10 @@ public class MemeCatalogService {
 	private boolean isLikelyMediaUrl(String url) {
 		String lower = url.toLowerCase(Locale.ROOT);
 		return lower.contains("i.redd.it")
-				|| lower.contains("v.redd.it")
 				|| lower.endsWith(".jpg")
 				|| lower.endsWith(".jpeg")
 				|| lower.endsWith(".png")
 				|| lower.endsWith(".gif")
-				|| lower.endsWith(".mp4")
-				|| lower.endsWith(".webm")
 				|| lower.contains("preview.redd.it");
 	}
 
@@ -809,9 +524,6 @@ public class MemeCatalogService {
 		if (lower.endsWith(".gif")) {
 			return "gif";
 		}
-		if (lower.endsWith(".mp4") || lower.endsWith(".webm") || lower.contains("v.redd.it")) {
-			return "video";
-		}
 		return "image";
 	}
 
@@ -819,24 +531,12 @@ public class MemeCatalogService {
 		return rawUrl.replace("&amp;", "&");
 	}
 
-	private boolean isPlayableMedia(MemeItem item) {
-		return "image".equals(item.type()) || "video".equals(item.type()) || item.embed();
+	private boolean isImageOnly(MemeItem item) {
+		return "image".equals(item.type());
 	}
 
 	private boolean isCuratedSnapshot(MemeSnapshotEntity snapshot) {
-		return "Imgflip".equalsIgnoreCase(snapshot.getSource());
-	}
-
-	private int parseOffset(String queryValue) {
-		if (queryValue == null || queryValue.isBlank()) {
-			return 0;
-		}
-		String normalized = queryValue.startsWith("offset:") ? queryValue.substring("offset:".length()) : queryValue;
-		try {
-			return Math.max(Integer.parseInt(normalized.trim()), 0);
-		} catch (NumberFormatException exception) {
-			return 0;
-		}
+		return "image".equalsIgnoreCase(snapshot.getMediaType());
 	}
 
 	private String truncate(String value, int maxLength) {
@@ -848,10 +548,76 @@ public class MemeCatalogService {
 
 	private List<MemeCategory> fallbackCatalog() {
 		return List.of(
-				new MemeCategory("gaming", "Gaming", "Humor images pulled from a popular meme catalog", List.of()),
-				new MemeCategory("work", "Work", "Humor images pulled from a popular meme catalog", List.of()),
-				new MemeCategory("kpop", "K-POP", "Humor images pulled from a popular meme catalog", List.of()),
-				new MemeCategory("sports", "Sports", "Humor images pulled from a popular meme catalog", List.of())
+				new MemeCategory("gaming", "Gaming", "Weekly top image memes from major gaming meme communities", List.of()),
+				new MemeCategory("work", "Work", "Weekly top image memes from office and developer humor communities", List.of()),
+				new MemeCategory("kpop", "K-POP", "Weekly top image memes from K-pop fandom humor communities", List.of()),
+				new MemeCategory("sports", "Sports", "Weekly top image memes from sports reaction communities", List.of())
+		);
+	}
+
+	@Transactional
+	protected void ensureDefaultCatalogConfig() {
+		Map<String, MemeCategoryEntity> categoryByKey = categoryRepository.findAll().stream()
+				.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category, (left, right) -> left, LinkedHashMap::new));
+
+		Map<String, MemeCategoryEntity> existingCategories = categoryByKey;
+		List<MemeCategoryEntity> categoriesToCreate = defaultCategorySeeds().stream()
+				.filter(seed -> !existingCategories.containsKey(seed.key()))
+				.map(seed -> new MemeCategoryEntity(seed.key(), seed.name(), seed.description(), seed.displayOrder(), true))
+				.collect(Collectors.toList());
+		if (!categoriesToCreate.isEmpty()) {
+			categoryRepository.saveAll(categoriesToCreate);
+			categoryByKey = categoryRepository.findAll().stream()
+					.collect(Collectors.toMap(MemeCategoryEntity::getCategoryKey, category -> category, (left, right) -> left, LinkedHashMap::new));
+		}
+
+		Map<String, List<MemeSourceConfigEntity>> configsByCategory = sourceConfigRepository.findAll().stream()
+				.collect(Collectors.groupingBy(config -> config.getCategory().getCategoryKey(), LinkedHashMap::new, Collectors.toList()));
+
+		List<MemeSourceConfigEntity> configsToCreate = new ArrayList<>();
+		for (SourceSeed seed : defaultSourceSeeds()) {
+			MemeCategoryEntity category = categoryByKey.get(seed.categoryKey());
+			if (category == null) {
+				continue;
+			}
+			boolean exists = configsByCategory.getOrDefault(seed.categoryKey(), List.of()).stream()
+					.anyMatch(config -> config.getSourceType() == seed.sourceType()
+							&& seed.queryValue().equals(config.getQueryValue()));
+			if (!exists) {
+				configsToCreate.add(new MemeSourceConfigEntity(
+						category,
+						seed.sourceType(),
+						seed.queryValue(),
+						seed.fetchLimit(),
+						seed.regionCode(),
+						seed.displayOrder(),
+						true
+				));
+			}
+		}
+		if (!configsToCreate.isEmpty()) {
+			sourceConfigRepository.saveAll(configsToCreate);
+		}
+	}
+
+	private List<CategorySeed> defaultCategorySeeds() {
+		return List.of(
+				new CategorySeed("gaming", "Gaming", "Weekly top image memes from major gaming meme communities", 1),
+				new CategorySeed("work", "Work", "Weekly top image memes from office and developer humor communities", 2),
+				new CategorySeed("kpop", "K-POP", "Weekly top image memes from K-pop fandom humor communities", 3),
+				new CategorySeed("sports", "Sports", "Weekly top image memes from sports reaction communities", 4)
+		);
+	}
+
+	private List<SourceSeed> defaultSourceSeeds() {
+		return List.of(
+				new SourceSeed("gaming", SourceType.REDDIT, "gamingmemes", 10, null, 1),
+				new SourceSeed("gaming", SourceType.REDDIT, "videogamememes", 10, null, 2),
+				new SourceSeed("work", SourceType.REDDIT, "workmemes", 10, null, 1),
+				new SourceSeed("work", SourceType.REDDIT, "ProgrammerHumor", 10, null, 2),
+				new SourceSeed("kpop", SourceType.REDDIT, "kpoopheads", 10, null, 1),
+				new SourceSeed("sports", SourceType.REDDIT, "sportsmemes", 10, null, 1),
+				new SourceSeed("sports", SourceType.REDDIT, "nbamemes", 10, null, 2)
 		);
 	}
 
@@ -887,5 +653,18 @@ public class MemeCatalogService {
 		public String getRegionCode() {
 			return regionCode;
 		}
+	}
+
+	private record CategorySeed(String key, String name, String description, int displayOrder) {
+	}
+
+	private record SourceSeed(
+			String categoryKey,
+			SourceType sourceType,
+			String queryValue,
+			int fetchLimit,
+			String regionCode,
+			int displayOrder
+	) {
 	}
 }

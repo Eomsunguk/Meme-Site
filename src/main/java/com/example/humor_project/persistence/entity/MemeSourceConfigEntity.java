@@ -47,6 +47,24 @@ public class MemeSourceConfigEntity {
 	protected MemeSourceConfigEntity() {
 	}
 
+	public MemeSourceConfigEntity(
+			MemeCategoryEntity category,
+			SourceType sourceType,
+			String queryValue,
+			int fetchLimit,
+			String regionCode,
+			int displayOrder,
+			boolean active
+	) {
+		this.category = category;
+		this.sourceType = sourceType;
+		this.queryValue = queryValue;
+		this.fetchLimit = fetchLimit;
+		this.regionCode = regionCode;
+		this.displayOrder = displayOrder;
+		this.active = active;
+	}
+
 	public MemeCategoryEntity getCategory() {
 		return category;
 	}
