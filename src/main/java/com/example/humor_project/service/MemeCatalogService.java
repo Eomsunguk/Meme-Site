@@ -16,6 +16,8 @@ import com.example.humor_project.persistence.repository.MemeSourceConfigReposito
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -56,6 +58,7 @@ public class MemeCatalogService {
 	private static final ZoneId KST = ZoneId.of("Asia/Seoul");
 	private static final int MAX_ITEMS_PER_CATEGORY = 10;
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_DATE;
+	private static final Logger log = LoggerFactory.getLogger(MemeCatalogService.class);
 
 	private final MemeCategoryRepository categoryRepository;
 	private final MemeSourceConfigRepository sourceConfigRepository;
@@ -117,9 +120,13 @@ public class MemeCatalogService {
 
 	@EventListener(ApplicationReadyEvent.class)
 	public void triggerStartupRefresh() {
-		if (!bootstrapEnabled || !warmUpEnabled) {
+		if (!bootstrapEnabled) {
 			return;
 		}
+		if (!warmUpEnabled && !shouldAutoHydrateEmptyCatalog()) {
+			return;
+		}
+		log.info("Triggering startup meme refresh. warmUpEnabled={}, autoHydrateEmptyCatalog={}", warmUpEnabled, shouldAutoHydrateEmptyCatalog());
 		CompletableFuture.runAsync(() -> refreshCatalogSafely(LocalDate.now(KST)));
 	}
 
@@ -163,10 +170,13 @@ public class MemeCatalogService {
 				cachedCategories = mergedCatalog;
 				lastUpdatedDate = refreshDate;
 				loadArchiveMonths(categories);
+				log.info("Meme refresh succeeded with {} items. Gaming items={}", itemCount, itemCountFor("gaming", mergedCatalog));
 				return;
 			}
+			log.warn("Meme refresh completed with no image memes fetched.");
 			saveFailedBatch(batch, "No image memes fetched", Instant.now());
 		} catch (Exception exception) {
+			log.warn("Meme refresh failed and fell back to empty catalog.", exception);
 			cachedCategories = fallbackCatalog();
 			cachedArchiveMonths = List.of();
 			return;
@@ -240,6 +250,19 @@ public class MemeCatalogService {
 								.collect(Collectors.toList())
 				))
 				.collect(Collectors.toList());
+	}
+
+	private boolean shouldAutoHydrateEmptyCatalog() {
+		return batchRepository.findTopByStatusOrderByRunDateDescStartedAtDesc(BatchStatus.SUCCESS).isEmpty()
+				|| cachedCategories.stream().anyMatch(category -> category.items().isEmpty());
+	}
+
+	private int itemCountFor(String categoryKey, List<MemeCategory> categories) {
+		return categories.stream()
+				.filter(category -> category.key().equals(categoryKey))
+				.findFirst()
+				.map(category -> category.items().size())
+				.orElse(0);
 	}
 
 	private List<MemeItem> fetchItems(MemeSourceConfigEntity config) {
