@@ -4,7 +4,9 @@ import com.example.humor_project.service.MemeCatalogService;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ResponseBody;
 
+import java.util.Map;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
@@ -26,5 +28,11 @@ public class MemeController {
 		model.addAttribute("nextUpdatedText", memeCatalogService.getNextUpdateDate().format(DateTimeFormatter.ISO_DATE));
 		model.addAttribute("currentMonthLabel", memeCatalogService.getLastUpdatedDate().format(MONTH_FORMATTER));
 		return "index";
+	}
+
+	@GetMapping("/health")
+	@ResponseBody
+	public Map<String, String> health() {
+		return Map.of("status", "ok");
 	}
 }
