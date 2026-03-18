@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Meme Pulse | Live Meme Trends</title>
+    <title th:text="${pageTitle}">Meme Pulse | Weekly Meme Snapshot Archive</title>
+    <meta name="description" th:content="${metaDescription}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
@@ -17,16 +18,40 @@
 <div class="bg-layer"></div>
 <main class="container">
     <section class="hero">
-        <p class="badge">LIVE TREND FEED</p>
-        <h1>Live Meme Feed by Category</h1>
+        <p class="badge">WEEKLY CURATED SNAPSHOT</p>
+        <h1>Weekly Meme Snapshot by Category</h1>
         <p class="hero-text">
-            This feed keeps about 10 image memes per category from public meme communities and stores weekly snapshots for the archive.
+            Meme Pulse organizes public meme posts into a searchable weekly snapshot. Each category keeps a focused set of items with source links, summaries, and archived rollups.
         </p>
         <p class="updated-at">
             Last updated: <strong th:text="${lastUpdatedText}">2026-03-08</strong>
             <span class="dot">&#8226;</span>
             Next auto refresh: <strong th:text="${nextUpdatedText}">2026-03-15</strong>
         </p>
+        <div class="hero-actions">
+            <a href="#current-snapshot" class="hero-link">Browse current snapshot</a>
+            <a href="#site-standards" class="hero-link hero-link-muted">How this archive works</a>
+        </div>
+        <div class="trust-grid">
+            <article class="trust-card">
+                <strong>Clear purpose</strong>
+                <p>This site is an archive and discovery layer, not a live social feed or a download mirror.</p>
+            </article>
+            <article class="trust-card">
+                <strong>Source context</strong>
+                <p>Every card keeps the original source link so visitors can verify the post and explore the full context.</p>
+            </article>
+            <article class="trust-card">
+                <strong>Focused browsing</strong>
+                <p>Categories, tags, and weekly archives help visitors find a specific meme format or trend quickly.</p>
+            </article>
+        </div>
+        <nav class="quick-nav" aria-label="Page sections">
+            <a href="#current-snapshot">Current snapshot</a>
+            <a href="#archive">Archive</a>
+            <a href="#site-standards">Site standards</a>
+            <a href="#faq">FAQ</a>
+        </nav>
         <div class="controls">
             <button type="button" class="category-btn active" data-category="all">All</button>
             <button type="button" class="category-btn" th:each="category : ${categories}" th:attr="data-category=${category.key}"
@@ -37,10 +62,32 @@
         </div>
     </section>
 
-    <section class="feed-section">
+    <section class="info-section">
+        <div class="section-heading">
+            <p class="badge badge-soft">WHY THIS PAGE EXISTS</p>
+            <h2>Built for useful browsing, not empty page depth</h2>
+        </div>
+        <div class="info-grid">
+            <article class="info-card">
+                <h3>Original organization layer</h3>
+                <p>The value here is the curation: posts are grouped by category, summarized, tagged, and preserved as weekly snapshots instead of being left as an unstructured stream.</p>
+            </article>
+            <article class="info-card">
+                <h3>Fast navigation</h3>
+                <p>Visitors can filter by category, search by tags, and move into archives without clicking through duplicate pages or repeated templates.</p>
+            </article>
+            <article class="info-card">
+                <h3>Expectation matched to reality</h3>
+                <p>The site states its refresh cycle clearly so users are not misled into expecting real-time updates that do not exist.</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="feed-section" id="current-snapshot">
         <div class="section-heading">
             <p class="badge badge-soft">CURRENT SNAPSHOT</p>
             <h2 th:text="${currentMonthLabel}">March 2026</h2>
+            <p class="section-copy">Each category shows a compact set of meme items from the current weekly refresh. Use the filters above to narrow the view before opening an external source.</p>
         </div>
         <div class="category-list">
             <article class="category-block" th:each="category : ${categories}" th:attr="data-category=${category.key}">
@@ -70,12 +117,17 @@
                 </div>
             </article>
         </div>
+        <div id="emptyState" class="empty-state hidden">
+            <h3>No items match this filter yet.</h3>
+            <p>Try another category or remove some keywords to return to the full weekly snapshot.</p>
+        </div>
     </section>
 
-    <section class="archive-section" th:if="${!#lists.isEmpty(archives)}">
+    <section class="archive-section" id="archive" th:if="${!#lists.isEmpty(archives)}">
         <div class="section-heading">
             <p class="badge badge-soft">WEEKLY ARCHIVE</p>
             <h2>Weekly Throwbacks</h2>
+            <p class="section-copy">Older snapshots stay available so visitors can compare categories over time instead of landing on near-empty pages.</p>
         </div>
         <div class="archive-stack">
             <section class="archive-month" th:each="archive : ${archives}">
@@ -117,7 +169,63 @@
             </section>
         </div>
     </section>
+
+    <section class="info-section" id="site-standards">
+        <div class="section-heading">
+            <p class="badge badge-soft">SITE STANDARDS</p>
+            <h2>Quality signals this site now makes explicit</h2>
+        </div>
+        <div class="standards-grid">
+            <article class="standard-card">
+                <h3>Distinct content purpose</h3>
+                <p>Meme Pulse does not create multiple thin pages around the same topic. The homepage combines search, category browsing, and archives in one clear destination.</p>
+            </article>
+            <article class="standard-card">
+                <h3>Transparent source handling</h3>
+                <p>Items include summaries and source attribution so users understand what they are clicking before leaving the site.</p>
+            </article>
+            <article class="standard-card">
+                <h3>Visitor-first navigation</h3>
+                <p>Important sections are reachable from the top navigation and footer, and informational pages explain the site, privacy notes, and contact path.</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="faq-section" id="faq">
+        <div class="section-heading">
+            <p class="badge badge-soft">FAQ</p>
+            <h2>Common visitor questions</h2>
+        </div>
+        <div class="faq-list">
+            <article class="faq-item">
+                <h3>Are these real-time meme rankings?</h3>
+                <p>No. This site publishes scheduled weekly snapshots. The update date is shown at the top of the page.</p>
+            </article>
+            <article class="faq-item">
+                <h3>Why link to original sources?</h3>
+                <p>The archive is meant to help discovery and comparison. Original links let visitors verify context and continue browsing from the source platform.</p>
+            </article>
+            <article class="faq-item">
+                <h3>What makes this different from a raw feed?</h3>
+                <p>Items are grouped, tagged, summarized, and preserved over time so trends are easier to revisit without searching across multiple communities manually.</p>
+            </article>
+        </div>
+    </section>
 </main>
+
+<footer class="site-footer">
+    <div class="footer-inner">
+        <div>
+            <strong>Meme Pulse</strong>
+            <p>Weekly meme snapshot archive with category filters, source context, and rolling historical views.</p>
+        </div>
+        <nav class="footer-nav" aria-label="Footer navigation">
+            <a th:href="@{/about}">About</a>
+            <a th:href="@{/contact}">Contact</a>
+            <a th:href="@{/privacy}">Privacy</a>
+        </nav>
+    </div>
+</footer>
 
 <script th:src="@{/js/app.js}"></script>
 </body>

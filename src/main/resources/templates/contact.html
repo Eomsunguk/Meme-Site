@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${pageTitle}">Contact | Meme Pulse</title>
+    <meta name="description" th:content="${metaDescription}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" th:href="@{/css/styles.css}">
+</head>
+<body>
+<div class="bg-layer"></div>
+<main class="container subpage">
+    <p class="badge">CONTACT</p>
+    <h1>Feedback and corrections</h1>
+    <p class="hero-text">Use this page if you need to report a broken source link, request a factual correction in a summary, or send general feedback about archive quality.</p>
+
+    <section class="info-section">
+        <div class="info-grid">
+            <article class="info-card">
+                <h2>Recommended contact method</h2>
+                <p>Email: <a href="mailto:hello@memepulse.example">hello@memepulse.example</a></p>
+                <p>Include the page URL, the meme title, and the issue you found so it can be checked quickly.</p>
+            </article>
+            <article class="info-card">
+                <h2>What to send</h2>
+                <p>Useful reports include broken outbound links, incorrect category labels, duplicate entries, and accessibility issues that make browsing difficult.</p>
+            </article>
+            <article class="info-card">
+                <h2>Response scope</h2>
+                <p>This site is an archive and discovery layer. Source-platform moderation, account issues, or removal requests tied to original posts need to be handled on the original platform as well.</p>
+            </article>
+        </div>
+    </section>
+
+    <div class="subpage-actions">
+        <a th:href="@{/}">Back to homepage</a>
+        <a th:href="@{/about}">About</a>
+        <a th:href="@{/privacy}">Privacy summary</a>
+    </div>
+</main>
+</body>
+</html>

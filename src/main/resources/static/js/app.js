@@ -1,10 +1,12 @@
 const buttons = document.querySelectorAll(".category-btn");
 const blocks = document.querySelectorAll(".category-block");
 const searchInput = document.getElementById("searchInput");
+const emptyState = document.getElementById("emptyState");
 
 function applyFilters() {
     const activeCategory = document.querySelector(".category-btn.active")?.dataset.category || "all";
     const keyword = (searchInput.value || "").trim().toLowerCase();
+    let visibleBlockCount = 0;
 
     blocks.forEach((block) => {
         const categoryMatch = activeCategory === "all" || block.dataset.category === activeCategory;
@@ -23,7 +25,14 @@ function applyFilters() {
         });
 
         block.classList.toggle("hidden", !hasVisibleCard || !categoryMatch);
+        if (hasVisibleCard && categoryMatch) {
+            visibleBlockCount += 1;
+        }
     });
+
+    if (emptyState) {
+        emptyState.classList.toggle("hidden", visibleBlockCount > 0);
+    }
 }
 
 buttons.forEach((button) => {

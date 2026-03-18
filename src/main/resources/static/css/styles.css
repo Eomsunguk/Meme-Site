@@ -85,6 +85,48 @@ body {
     margin-top: 18px;
 }
 
+.hero-actions,
+.quick-nav,
+.subpage-actions,
+.footer-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.hero-actions {
+    margin: 22px 0 18px;
+}
+
+.hero-link,
+.subpage-actions a,
+.footer-nav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 42px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--ink);
+    text-decoration: none;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.hero-link-muted {
+    background: transparent;
+}
+
+.quick-nav {
+    margin: 4px 0 22px;
+}
+
+.quick-nav a {
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: 0.92rem;
+}
+
 .category-btn {
     border: 1px solid var(--border);
     background: rgba(255, 255, 255, 0.04);
@@ -124,13 +166,20 @@ body {
 }
 
 .feed-section,
-.archive-section {
+.archive-section,
+.info-section,
+.faq-section {
     margin-top: 32px;
 }
 
 .section-heading h2,
 .archive-header h3 {
     margin: 10px 0 4px;
+}
+
+.section-copy {
+    max-width: 760px;
+    color: var(--ink-soft);
 }
 
 .badge-soft {
@@ -154,6 +203,60 @@ body {
 
 .category-header h2 {
     margin-bottom: 4px;
+}
+
+.trust-grid,
+.info-grid,
+.standards-grid,
+.faq-list {
+    display: grid;
+    gap: 16px;
+}
+
+.trust-grid,
+.info-grid,
+.standards-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.trust-card,
+.info-card,
+.standard-card,
+.faq-item,
+.empty-state,
+.site-footer,
+.subpage {
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(6px);
+}
+
+.trust-card,
+.info-card,
+.standard-card,
+.faq-item,
+.empty-state {
+    border-radius: 18px;
+    padding: 18px;
+}
+
+.trust-card p,
+.info-card p,
+.standard-card p,
+.faq-item p,
+.site-footer p,
+.subpage p {
+    color: var(--ink-soft);
+    line-height: 1.55;
+}
+
+.trust-card strong,
+.info-card h2,
+.info-card h3,
+.standard-card h3,
+.faq-item h3 {
+    display: block;
+    margin: 0 0 8px;
 }
 
 .meme-grid {
@@ -234,6 +337,11 @@ body {
     display: none;
 }
 
+.empty-state {
+    margin-top: 20px;
+    text-align: center;
+}
+
 .splash {
     position: fixed;
     inset: 0;
@@ -268,6 +376,43 @@ body {
     text-transform: uppercase;
 }
 
+.site-footer {
+    width: min(1100px, 92%);
+    margin: 0 auto 32px;
+    border-radius: 22px;
+}
+
+.footer-inner,
+.subpage {
+    padding: 24px;
+}
+
+.footer-inner {
+    display: flex;
+    justify-content: space-between;
+    gap: 18px;
+    align-items: center;
+}
+
+.subpage {
+    margin-top: 40px;
+    border-radius: 24px;
+}
+
+.subpage h1 {
+    font-family: "Do Hyeon", sans-serif;
+    font-size: clamp(2rem, 4vw, 3.2rem);
+    margin: 10px 0;
+}
+
+.subpage-actions {
+    margin-top: 22px;
+}
+
+.subpage a {
+    color: var(--accent);
+}
+
 @media (max-width: 700px) {
     .container {
         padding-top: 24px;
@@ -275,5 +420,10 @@ body {
 
     .meme-grid {
         grid-template-columns: 1fr;
+    }
+
+    .footer-inner {
+        flex-direction: column;
+        align-items: flex-start;
     }
 }

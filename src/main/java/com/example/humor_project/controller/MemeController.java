@@ -20,6 +20,7 @@ import java.util.Locale;
 public class MemeController {
 	private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.ENGLISH);
 	private static final Logger log = LoggerFactory.getLogger(MemeController.class);
+	private static final String SITE_NAME = "Meme Pulse";
 
 	private final MemeCatalogService memeCatalogService;
 
@@ -39,6 +40,8 @@ public class MemeController {
 			model.addAttribute("lastUpdatedText", lastUpdatedDate.format(DateTimeFormatter.ISO_DATE));
 			model.addAttribute("nextUpdatedText", nextUpdatedDate.format(DateTimeFormatter.ISO_DATE));
 			model.addAttribute("currentMonthLabel", lastUpdatedDate.format(MONTH_FORMATTER));
+			model.addAttribute("pageTitle", SITE_NAME + " | Weekly Meme Snapshot Archive");
+			model.addAttribute("metaDescription", "Browse curated weekly meme snapshots by category with archive views, source context, and searchable tags.");
 		} catch (Exception exception) {
 			LocalDate today = LocalDate.now();
 			log.error("Failed to render meme index page", exception);
@@ -47,8 +50,31 @@ public class MemeController {
 			model.addAttribute("lastUpdatedText", today.format(DateTimeFormatter.ISO_DATE));
 			model.addAttribute("nextUpdatedText", today.plusWeeks(1).format(DateTimeFormatter.ISO_DATE));
 			model.addAttribute("currentMonthLabel", today.format(MONTH_FORMATTER));
+			model.addAttribute("pageTitle", SITE_NAME + " | Weekly Meme Snapshot Archive");
+			model.addAttribute("metaDescription", "Browse curated weekly meme snapshots by category with archive views, source context, and searchable tags.");
 		}
 		return "index";
+	}
+
+	@GetMapping("/about")
+	public String about(Model model) {
+		model.addAttribute("pageTitle", "About | " + SITE_NAME);
+		model.addAttribute("metaDescription", "Learn how Meme Pulse curates weekly meme snapshots, organizes archives, and prioritizes clear source context.");
+		return "about";
+	}
+
+	@GetMapping("/contact")
+	public String contact(Model model) {
+		model.addAttribute("pageTitle", "Contact | " + SITE_NAME);
+		model.addAttribute("metaDescription", "Contact Meme Pulse about site feedback, source corrections, and archive issues.");
+		return "contact";
+	}
+
+	@GetMapping("/privacy")
+	public String privacy(Model model) {
+		model.addAttribute("pageTitle", "Privacy | " + SITE_NAME);
+		model.addAttribute("metaDescription", "Review the Meme Pulse privacy summary, data handling notes, and external link disclosures.");
+		return "privacy";
 	}
 
 	@GetMapping("/health")
