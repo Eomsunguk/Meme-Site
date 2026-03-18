@@ -4,9 +4,12 @@ import com.example.humor_project.model.CategoryDetailView;
 import com.example.humor_project.model.MemeArchiveMonth;
 import com.example.humor_project.model.MemeCategory;
 import com.example.humor_project.model.MemeItem;
+import jakarta.servlet.http.HttpServletRequest;
 import com.example.humor_project.service.MemeCatalogService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -121,6 +124,42 @@ public class MemeController {
 		return Map.of("status", "ok");
 	}
 
+	@GetMapping(value = "/robots.txt", produces = MediaType.TEXT_PLAIN_VALUE)
+	@ResponseBody
+	public ResponseEntity<String> robots(HttpServletRequest request) {
+		String baseUrl = baseUrl(request);
+		String body = """
+				User-agent: *
+				Allow: /
+
+				Sitemap: %s/sitemap.xml
+				""".formatted(baseUrl);
+		return ResponseEntity.ok(body);
+	}
+
+	@GetMapping(value = "/sitemap.xml", produces = MediaType.APPLICATION_XML_VALUE)
+	@ResponseBody
+	public ResponseEntity<String> sitemap(HttpServletRequest request) {
+		String baseUrl = baseUrl(request);
+		List<String> urls = new ArrayList<>();
+		urls.add(baseUrl + "/");
+		urls.add(baseUrl + "/about");
+		urls.add(baseUrl + "/contact");
+		urls.add(baseUrl + "/privacy");
+		urls.add(baseUrl + "/editorial-policy");
+		memeCatalogService.getTrendingCategories().stream()
+				.map(category -> baseUrl + "/category/" + category.key())
+				.forEach(urls::add);
+
+		String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+				+ "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n"
+				+ urls.stream()
+				.map(url -> "  <url><loc>" + escapeXml(url) + "</loc></url>")
+				.collect(Collectors.joining("\n"))
+				+ "\n</urlset>\n";
+		return ResponseEntity.ok(xml);
+	}
+
 	private List<CategoryDetailView> buildCategoryViews(List<MemeCategory> categories, List<MemeArchiveMonth> archives) {
 		return categories.stream()
 				.map(category -> buildCategoryView(category, archives))
@@ -222,5 +261,21 @@ public class MemeController {
 				"The page groups related items in one destination instead of scattering near-duplicate posts across many thin URLs.",
 				"Archive sections stay visible only when historical snapshots exist, keeping empty sections out of the browsing path."
 		);
+	}
+
+	private String baseUrl(HttpServletRequest request) {
+		String forwardedProto = request.getHeader("X-Forwarded-Proto");
+		String forwardedHost = request.getHeader("X-Forwarded-Host");
+		String scheme = forwardedProto != null && !forwardedProto.isBlank() ? forwardedProto : request.getScheme();
+		String host = forwardedHost != null && !forwardedHost.isBlank() ? forwardedHost : request.getHeader("Host");
+		return scheme + "://" + host;
+	}
+
+	private String escapeXml(String value) {
+		return value.replace("&", "&amp;")
+				.replace("<", "&lt;")
+				.replace(">", "&gt;")
+				.replace("\"", "&quot;")
+				.replace("'", "&apos;");
 	}
 }
