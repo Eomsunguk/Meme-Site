@@ -51,6 +51,7 @@
         </div>
         <nav class="quick-nav" aria-label="Page sections">
             <a href="#current-snapshot">Current snapshot</a>
+            <a href="#category-guides">Category guides</a>
             <a href="#archive">Archive</a>
             <a href="#site-standards">Site standards</a>
             <a href="#faq">FAQ</a>
@@ -82,6 +83,23 @@
             <article class="info-card">
                 <h3>Expectation matched to reality</h3>
                 <p>The site states its refresh cycle clearly so users are not misled into expecting real-time updates that do not exist.</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="info-section" id="category-guides" th:if="${!#lists.isEmpty(categoryViews)}">
+        <div class="section-heading">
+            <p class="badge badge-soft">CATEGORY GUIDES</p>
+            <h2>Original context for every meme lane</h2>
+            <p class="section-copy">Each guide page explains recurring themes, browsing tips, and archive history so visitors get editorial value beyond the image grid itself.</p>
+        </div>
+        <div class="info-grid">
+            <article class="info-card guide-card" th:each="view : ${categoryViews}">
+                <p class="guide-kicker" th:text="${view.itemCount + ' current items · ' + view.archiveCount + ' archived weeks'}">10 current items · 3 archived weeks</p>
+                <h3 th:text="${view.name}">Gaming</h3>
+                <p th:text="${view.trendSummary}">Trend summary</p>
+                <p class="guide-tip" th:text="${view.browsingTip}">Browsing tip</p>
+                <a th:href="@{/category/{key}(key=${view.key})}">Open detailed guide</a>
             </article>
         </div>
     </section>
@@ -190,6 +208,10 @@
             <article class="standard-card">
                 <h3>Visitor-first navigation</h3>
                 <p>Important sections are reachable from the top navigation and footer, and informational pages explain the site, privacy notes, and contact path.</p>
+            </article>
+            <article class="standard-card">
+                <h3>Ads follow content, not the reverse</h3>
+                <p>Advertising is reserved for pages that already deliver clear informational value. Utility pages and low-context destinations should stay secondary.</p>
             </article>
         </div>
     </section>

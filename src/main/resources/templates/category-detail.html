@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title th:text="${pageTitle}">Category Detail | Meme Pulse</title>
+    <meta name="description" th:content="${metaDescription}">
+    <meta name="google-adsense-account" content="ca-pub-7451671953319405">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-7451671953319405"
+            crossorigin="anonymous"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Do+Hyeon&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" th:href="@{/css/styles.css}">
+</head>
+<body>
+<div class="bg-layer"></div>
+<main class="container">
+    <section class="hero">
+        <p class="badge" th:text="${detail.name + ' GUIDE'}">Gaming Guide</p>
+        <h1 th:text="${detail.name + ' Meme Archive Guide'}">Gaming Meme Archive Guide</h1>
+        <p class="hero-text" th:text="${detail.description}">Description</p>
+        <p class="updated-at">
+            Current items: <strong th:text="${detail.itemCount}">10</strong>
+            <span class="dot">&#8226;</span>
+            Archived weeks: <strong th:text="${detail.archiveCount}">3</strong>
+            <span class="dot">&#8226;</span>
+            Main source mix: <strong th:text="${detail.topSourceLabel}">Cloudinary Mirror</strong>
+        </p>
+        <div class="hero-actions">
+            <a href="#guide-summary" class="hero-link">Read guide summary</a>
+            <a href="#current-items" class="hero-link hero-link-muted">Browse current items</a>
+        </div>
+    </section>
+
+    <section class="info-section" id="guide-summary">
+        <div class="section-heading">
+            <p class="badge badge-soft">EDITORIAL GUIDE</p>
+            <h2>Why this category deserves a dedicated page</h2>
+        </div>
+        <div class="info-grid">
+            <article class="info-card">
+                <h3>Trend summary</h3>
+                <p th:text="${detail.trendSummary}">Trend summary</p>
+            </article>
+            <article class="info-card">
+                <h3>Why it matters</h3>
+                <p th:text="${detail.whyItMatters}">Why it matters</p>
+            </article>
+            <article class="info-card">
+                <h3>Browsing tip</h3>
+                <p th:text="${detail.browsingTip}">Browsing tip</p>
+            </article>
+        </div>
+    </section>
+
+    <section class="info-section">
+        <div class="section-heading">
+            <p class="badge badge-soft">RECURRING SIGNALS</p>
+            <h2>Tags and review standards</h2>
+        </div>
+        <div class="info-grid">
+            <article class="info-card">
+                <h3>Top tags in this lane</h3>
+                <div class="tag-row">
+                    <span class="tag-pill" th:each="tag : ${detail.topTags}" th:text="${tag}">reaction</span>
+                </div>
+            </article>
+            <article class="info-card">
+                <h3>Editorial checks</h3>
+                <ul class="flat-list">
+                    <li th:each="check : ${detail.editorialChecks}" th:text="${check}">Editorial check</li>
+                </ul>
+            </article>
+        </div>
+    </section>
+
+    <section class="feed-section" id="current-items">
+        <div class="section-heading">
+            <p class="badge badge-soft">CURRENT ITEMS</p>
+            <h2 th:text="${detail.name + ' Current Snapshot'}">Gaming Current Snapshot</h2>
+            <p class="section-copy">This page combines original explanatory content with the current image set so visitors can understand the lane before leaving for a source platform.</p>
+        </div>
+        <div class="meme-grid">
+            <div class="meme-card" th:each="meme : ${detail.currentItems}">
+                <div class="media">
+                    <img th:if="${meme.type == 'image'}"
+                         th:src="${meme.mediaUrl}" th:alt="${meme.title}" loading="lazy">
+                </div>
+                <div class="card-body">
+                    <div class="meta">
+                        <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
+                        <span class="source" th:text="${meme.source}">Source</span>
+                        <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+                    </div>
+                    <h3 th:text="${meme.title}">Title</h3>
+                    <p th:text="${meme.summary}">Summary</p>
+                    <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="archive-section" th:if="${!#lists.isEmpty(detail.relatedArchives)}">
+        <div class="section-heading">
+            <p class="badge badge-soft">CATEGORY ARCHIVE</p>
+            <h2 th:text="${detail.name + ' Weekly History'}">Gaming Weekly History</h2>
+            <p class="section-copy">Older snapshots stay attached to the same category page so the archive remains useful without multiplying thin standalone URLs.</p>
+        </div>
+        <div class="archive-stack">
+            <section class="archive-month" th:each="archive : ${detail.relatedArchives}">
+                <div class="archive-header">
+                    <h3 th:text="${archive.label}">Last Week</h3>
+                    <p>
+                        Snapshot kept from
+                        <strong th:text="${#temporals.format(archive.snapshotDate, 'yyyy-MM-dd')}">2026-03-10</strong>
+                    </p>
+                </div>
+                <div class="meme-grid" th:each="category : ${archive.categories}">
+                    <div class="meme-card" th:each="meme : ${category.items}">
+                        <div class="media">
+                            <img th:if="${meme.type == 'image'}"
+                                 th:src="${meme.mediaUrl}" th:alt="${meme.title}" loading="lazy">
+                        </div>
+                        <div class="card-body">
+                            <div class="meta">
+                                <span th:text="${#strings.toUpperCase(meme.type)}">IMAGE</span>
+                                <span class="source" th:text="${meme.source}">Source</span>
+                                <span class="score" th:text="${'score ' + meme.popularity}">score 0</span>
+                            </div>
+                            <h3 th:text="${meme.title}">Title</h3>
+                            <p th:text="${meme.summary}">Summary</p>
+                            <a th:href="${meme.sourceUrl}" target="_blank" rel="noreferrer">View Source</a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </section>
+
+    <section class="info-section">
+        <div class="section-heading">
+            <p class="badge badge-soft">EXPLORE NEXT</p>
+            <h2>Other categories</h2>
+        </div>
+        <div class="quick-nav">
+            <a th:each="category : ${allCategories}"
+               th:href="@{/category/{key}(key=${category.key})}"
+               th:text="${category.name}">Gaming</a>
+        </div>
+    </section>
+</main>
+</body>
+</html>
