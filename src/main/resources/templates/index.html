@@ -53,6 +53,7 @@
             <a href="#current-snapshot">Current snapshot</a>
             <a href="#category-guides">Category guides</a>
             <a href="#archive">Archive</a>
+            <a th:href="@{/editorial-policy}">Editorial policy</a>
             <a href="#site-standards">Site standards</a>
             <a href="#faq">FAQ</a>
         </nav>
@@ -234,6 +235,18 @@
                 <h3>What makes this different from a raw feed?</h3>
                 <p>Items are grouped, tagged, summarized, and preserved over time so trends are easier to revisit without searching across multiple communities manually.</p>
             </article>
+            <article class="faq-item">
+                <h3>Why are there separate category guide pages?</h3>
+                <p>Each category guide adds editorial explanation, recurring tag signals, and archive context so the site offers more than a single scrolling grid of images.</p>
+            </article>
+            <article class="faq-item">
+                <h3>Does every page show ads?</h3>
+                <p>No. Content-rich destinations are the priority. Utility pages such as policy and contact pages should stay secondary to the core archive experience.</p>
+            </article>
+            <article class="faq-item">
+                <h3>How are broken links or incorrect summaries handled?</h3>
+                <p>Visitors can report them through the contact page. The site should correct factual issues and remove low-quality or non-working entries when found.</p>
+            </article>
         </div>
     </section>
 </main>
@@ -246,6 +259,7 @@
         </div>
         <nav class="footer-nav" aria-label="Footer navigation">
             <a th:href="@{/about}">About</a>
+            <a th:href="@{/editorial-policy}">Editorial Policy</a>
             <a th:href="@{/contact}">Contact</a>
             <a th:href="@{/privacy}">Privacy</a>
         </nav>

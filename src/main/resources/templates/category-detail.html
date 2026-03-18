@@ -72,6 +72,11 @@
                     <li th:each="check : ${detail.editorialChecks}" th:text="${check}">Editorial check</li>
                 </ul>
             </article>
+            <article class="info-card">
+                <h3>Policy context</h3>
+                <p>This guide page is meant to be a content destination in its own right. It combines explanation, tag patterns, archive history, and current items instead of relying on ad placement as the primary reason to exist.</p>
+                <a th:href="@{/editorial-policy}">Read editorial policy</a>
+            </article>
         </div>
     </section>
 

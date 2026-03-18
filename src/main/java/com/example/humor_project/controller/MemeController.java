@@ -108,6 +108,13 @@ public class MemeController {
 		return "privacy";
 	}
 
+	@GetMapping("/editorial-policy")
+	public String editorialPolicy(Model model) {
+		model.addAttribute("pageTitle", "Editorial Policy | " + SITE_NAME);
+		model.addAttribute("metaDescription", "Review the Meme Pulse editorial policy, inclusion standards, correction flow, and archive principles.");
+		return "editorial-policy";
+	}
+
 	@GetMapping("/health")
 	@ResponseBody
 	public Map<String, String> health() {
