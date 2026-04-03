@@ -1,0 +1,12 @@
+.git
+.github
+.gradle
+.gradle-user-home
+build
+boot.log
+data
+README.md
+HELP.md
+railway.toml
+nixpacks.toml
+Procfile

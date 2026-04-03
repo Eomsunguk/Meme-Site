@@ -1,0 +1,7 @@
+name: humor-project
+
+app: dockerfile
+
+options:
+  ports: 8080
+  dockerfile: Dockerfile
